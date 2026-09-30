@@ -14,8 +14,8 @@ MODE_SELECT_MS = 2000
 # The mechanical bumper is the home switch, not the optional Touch LED.
 PORT_Z = Ports.PORT1
 PORT_HOME = Ports.PORT2
-PORT_TOUCH = Ports.PORT3
-PORT_X = Ports.PORT5
+PORT_TOUCH = Ports.PORT4
+PORT_X = Ports.PORT6
 PORT_OPTICAL = Ports.PORT7
 PORT_DISTANCE = Ports.PORT8
 PORT_GRIP = Ports.PORT9
