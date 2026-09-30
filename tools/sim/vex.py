@@ -8,20 +8,26 @@ import random
 
 # ---- simulated world (run.py may overwrite these before main.py runs) -------
 SIM = {
-    "k_x": 0.102,          # true mm/deg (config guesses 0.10: shows calibration error)
-    "k_z": 0.098,
-    "x_max": 1250.0,       # hard stops, mm
+    "k_x": 0.10,
+    "k_z": 0.10,
+    "x_min": -1250.0,      # physical positions, independent of encoder zero
+    "x_max": 0.0,
+    "x_start": -200.0,
     "z_max": 420.0,
-    "dist_dx": 0.0,        # true gripper X minus beam X (DIST_DX_MM should come out as minus this)
+    "dist_dx": 0.0,        # beam X minus gripper X; the same sign as DIST_DX_MM
     "grab_reading": 10.0,  # true distance reading in the grab pose
     "hold_reading": 8.0,   # reading while a cube is held
-    "beam_half": 8.0,      # beam half width, mm
+    "beam_half": 0.0,      # ideal narrow beam; test wider beams separately
     "noise": 1.0,          # distance noise sigma, mm
     "wall_z": 350.0,       # mining area back wall, grab-Z frame
     "cube": 75.0,
     "cubes": [],           # dicts: x, z, colour, held, placed
     "port_x": 5, "port_z": 1, "port_grip": 9,
     "trace": False,
+    "home_mode": "normal",  # normal, missing, stuck, never
+    "grip_inner": 89.0,
+    "grip_outer": 100.0,
+    "grip_depth": 80.0,
 }
 
 _t = [0]           # ms
@@ -66,7 +72,12 @@ def _grip_logic():
     if _grip_state[0] == "open" and g._pos > -60:
         _grip_state[0] = "closed"
         for c in SIM["cubes"]:
-            if not c.get("held") and abs(c["x"] - x) < SIM["cube"] / 2 and abs(c["z"] - z) < 15:
+            centred = abs(c["x"] - x) <= (SIM["grip_inner"] - SIM["cube"]) / 2
+            blocked = any(other is not c and not other.get("held")
+                          and abs(other["x"] - x) < (SIM["grip_outer"] + SIM["cube"]) / 2
+                          and other["z"] < z + SIM["grip_depth"]
+                          for other in SIM["cubes"])
+            if not c.get("held") and centred and not blocked and abs(c["z"] - z) < 15:
                 c["held"] = True
                 break
     elif _grip_state[0] == "closed" and g._pos < -300:
@@ -111,7 +122,8 @@ class Motor:
 
     def __init__(self, port, *args):
         self.port = port
-        self._pos = 0.0
+        self._pos = SIM["x_start"] / SIM["k_x"] if port == SIM["port_x"] else 0.0
+        self._zero = 0.0
         self._vel = 0.0         # actual deg/s
         self._mode = "idle"
         self._target = 0.0
@@ -123,7 +135,7 @@ class Motor:
 
     def _limits(self):
         if self.port == SIM["port_x"]:
-            return (-5.0 / SIM["k_x"], SIM["x_max"] / SIM["k_x"])
+            return (SIM["x_min"] / SIM["k_x"], SIM["x_max"] / SIM["k_x"])
         if self.port == SIM["port_z"]:
             return (-5.0 / SIM["k_z"], SIM["z_max"] / SIM["k_z"])
         return (-600.0, 20.0)
@@ -162,10 +174,10 @@ class Motor:
         self._timeout = value
 
     def set_position(self, value, units=DEGREES):
-        self._pos = float(value)
+        self._zero = self._pos - float(value)
 
     def position(self, units=DEGREES):
-        return self._pos
+        return self._pos - self._zero
 
     def velocity(self, units=PERCENT):
         return self._vel / self.MAX_DPS * 100.0
@@ -177,7 +189,7 @@ class Motor:
 
     def spin_to_position(self, rotation, units=DEGREES, velocity=50, units_v=PERCENT, wait=True):
         self._mode = "pos"
-        self._target = float(rotation)
+        self._target = float(rotation) + self._zero
         self._speed = abs(velocity)
         self._t0 = _t[0]
         self._done = False
@@ -202,7 +214,7 @@ class Distance:
     def object_distance(self, units=MM):
         if _held() is not None:
             return SIM["hold_reading"] + random.gauss(0, SIM["noise"] * 0.3)
-        x = _mm(SIM["port_x"]) - SIM["dist_dx"]
+        x = _mm(SIM["port_x"]) + SIM["dist_dx"]
         z = _mm(SIM["port_z"])
         near = SIM["wall_z"]
         for c in SIM["cubes"]:
@@ -241,10 +253,12 @@ class Bumper:
         pass
 
     def installed(self):
-        return True
+        return SIM["home_mode"] != "missing"
 
     def pressing(self):
-        return _mm(SIM["port_x"]) >= SIM["x_max"] - 1
+        if SIM["home_mode"] != "normal":
+            return SIM["home_mode"] == "stuck"
+        return _mm(SIM["port_x"]) >= SIM["x_max"] - 0.2
 
 
 class Touchled:

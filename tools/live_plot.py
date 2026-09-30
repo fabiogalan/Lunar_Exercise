@@ -1,4 +1,4 @@
-"""Live view of the robot (laptop side): map, arm, distance beam, distance over time.
+"""Live view: arm, distance beam, picked cube locations, distance over time.
 
     pip3 install pyserial matplotlib
     python3 tools/live_plot.py                         # auto: listens on all brain USB ports
@@ -10,11 +10,10 @@ close the terminal in VS Code first, only one program can hold the port.
 Everything that is not telemetry (calibration results, CONFIG lines to paste,
 warnings) is printed here and everything is saved to logs/<date-time>.log.
 
-Telemetry lines from src/main.py (section 5):
+Telemetry lines from src/main.py:
     R,x,z,d[,hit_x,hit_z]   live robot line, d = -1: nothing seen
-    D,x,z                   map bin (z = -1 empty, -2 unknown)
     C,x,z,colour            cube identified
-    S,state,ms              state finished
+    E,text                 status, calibration results, or error
 """
 import collections
 import glob
@@ -28,7 +27,6 @@ from matplotlib.animation import FuncAnimation
 
 HISTORY_S = 30.0
 
-profile = {}                                # x -> z
 cubes = []                                  # (x, z, colour)
 robot = {"x": 0.0, "z": 0.0, "d": None, "hit": None}
 dist_hist = collections.deque(maxlen=2000)  # (t, d)
@@ -56,13 +54,10 @@ def handle(line, echo=True):
                 robot["hit"] = (float(parts[4]), float(parts[5])) if len(parts) >= 6 else None
                 dist_hist.append((time.time() - t0, robot["d"]))
                 return
-            if kind == "D":
-                profile[float(parts[1])] = float(parts[2])
-                return
             if kind == "C":
                 cubes.append((float(parts[1]), float(parts[2]), parts[3]))
-            elif kind == "S":
-                status[0] = "%s (%.1f s)" % (parts[1], float(parts[2]) / 1000.0)
+            elif kind == "E":
+                status[0] = line[2:]
     except (ValueError, IndexError):
         pass
     if echo:
@@ -85,15 +80,12 @@ def read_serial(port):
 
 def draw(ax_map, ax_d):
     with lock:
-        xs = sorted(profile)
-        zs = [profile[x] if profile[x] >= 0 else float("nan") for x in xs]
         cs = list(cubes)
         rx, rz, d, hit = robot["x"], robot["z"], robot["d"], robot["hit"]
         hist = list(dist_hist)
         st = status[0]
 
     ax_map.clear()
-    ax_map.plot(xs, zs, ".", color="0.35", markersize=3, label="map (grab-Z)")
     for x, z, colour in cs:
         ax_map.plot(x, z, "s", markersize=9, markeredgecolor="k",
                     color={"red": "tab:red", "green": "tab:green", "blue": "tab:blue"}.get(colour, "k"))
@@ -101,7 +93,7 @@ def draw(ax_map, ax_d):
     if hit is not None:
         ax_map.plot([hit[0], hit[0]], [rz, hit[1]], ":", color="tab:purple")
         ax_map.plot(hit[0], hit[1], "*", color="tab:purple", markersize=14, label="beam hit")
-    ax_map.set_xlabel("X along rail [mm]")
+    ax_map.set_xlabel("X [mm]: home at 0, left is negative")
     ax_map.set_ylabel("Z into field [mm]")
     ax_map.invert_yaxis()
     ax_map.set_title("X %.0f  Z %.0f  d %s   |   %s" % (rx, rz, "-" if d is None else "%.0f mm" % d, st))

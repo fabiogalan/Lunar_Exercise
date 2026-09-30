@@ -2,8 +2,9 @@
 
     python3 tools/build.py mission      # competition: MISSION only
     python3 tools/build.py calibrate    # CALIBRATE + TEST (Left/Right at start-up)
+    python3 tools/build.py cal-home     # home right and release the bumper
     python3 tools/build.py cal-z        # one calibration routine only (smallest):
-                                        #   cal-z cal-x cal-grip cal-cube cal-colour cal-teach cal-dist
+                                        #   cal-z cal-x cal-grip cal-cube cal-colour cal-teach cal-dist cal-rate
     python3 tools/build.py test         # TEST only
     python3 tools/build.py check        # each motor moves a bit by itself, reports OK / NOT MOVING
     python3 tools/build.py all          # everything (probably too big for the brain)
@@ -35,7 +36,7 @@ TARGETS = {
     "all": (("MISSION", "CALIBRATE", "TEST"), {"Mission", "startup", "calibration_menu", "test_mode"}, set()),
 }
 # one small program per calibration routine: (build name, routine name in CAL_ROUTINES)
-CAL_PARTS = (("cal-z", "Z scale"), ("cal-x", "X scale"), ("cal-grip", "Grip"), ("cal-cube", "Cube pose"),
+CAL_PARTS = (("cal-home", "Home"), ("cal-z", "Z scale"), ("cal-x", "X scale"), ("cal-grip", "Grip"), ("cal-cube", "Cube pose"),
              ("cal-colour", "Colour"), ("cal-teach", "Teach pts"), ("cal-dist", "Distance"),
              ("cal-rate", "Rates"))
 for _name, _routine in CAL_PARTS:
@@ -166,7 +167,7 @@ def inline_constants(tree, keep):
 def prune_methods(tree):
     """Drop methods whose name is never used as an attribute anywhere else.
     Conservative: a name used on any object keeps that method in every class.
-    Dunder methods and mission states (s_*, called through getattr) stay."""
+    Dunder methods stay. All other method calls must be explicit attributes."""
     while True:
         used = set()
         for cls in tree.body:
@@ -179,7 +180,7 @@ def prune_methods(tree):
                 continue
             body = [m for m in cls.body if not (
                 isinstance(m, ast.FunctionDef) and m.name not in used
-                and not m.name.startswith("__") and not m.name.startswith("s_"))]
+                and not m.name.startswith("__"))]
             if len(body) != len(cls.body):
                 cls.body = body or [ast.Pass()]
                 removed = True

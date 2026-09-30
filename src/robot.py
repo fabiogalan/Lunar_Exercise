@@ -1,168 +1,111 @@
-# =============================================================================
-# LUNAR RESOURCE SORTING - Team 2
-#
-# THIS is the source you edit. The brain gets src/main.py, which is generated:
-#     python3 tools/build.py mission      (or: calibrate)
-# then Build and Download in VS Code. The brain only runs one file and runs
-# out of memory compiling all of this, so build.py strips comments/docstrings
-# and keeps only the code the chosen mode can reach.
-#
-# Sections, each only uses the ones above it:
-#
-#   1 CONFIG       every number the robot uses (MEASURE / CAL markers)
-#   2 HAL          the only code that talks to vex devices
-#   3 AXES         degree <-> mm mapping, motion with timeouts
-#   4 WORLD MAP    2D distance profile + cube list (pure python, no vex)
-#   5 TELEMETRY    brain screen plot + serial lines for tools/live_plot.py
-#   6 SKILLS       sweep, approach, grab, identify, place
-#   7 MISSION      state machine, time budget, recovery
-#   8 CALIBRATION  start-up self check + bench calibration menu
-#   9 ENTRY        MODE switch
-#
-# 2D world frame, millimetres (height is ignored everywhere):
-#   X  along the rail. X = 0 is the start pose (robot is always placed there).
-#      +X points from the mining area towards the production facility.
-#   Z  perpendicular to the rail, into the field. Z = 0 is the arm fully
-#      retracted.
-#   A cube's (x, z) is "where the gripper must be to grab it", so the planner
-#   never deals with sensor geometry. Only CAL values below know about sensors.
-#
-# Start pose (setup checklist): trolley at X = 0, arm fully retracted,
-# gripper closed. All encoders are zeroed there when the program starts.
-# =============================================================================
+"""Lunar resource sorter. Edit this file; build.py generates main.py.
+
+X = 0 at the RIGHT home switch; left is negative. Z = 0 is retracted.
+Start with the arm retracted and the gripper closed. X is homed automatically.
+Sections: configuration, hardware/motion, local search, mission, calibration.
+"""
 from vex import *
 
-MODE = "MISSION"   # "MISSION" | "CALIBRATE" | "TEST"
-BUILD_MODES = ("MISSION", "CALIBRATE", "TEST")    # tools/build.py narrows this
-# Shortcut without re-downloading, during the first 2 s after start
-# ("hold ..." on the screen):
-#   brain Left button  -> CALIBRATE      brain Right button -> TEST
-#   (or Touch LED, if one is plugged in: release < 4 s CALIBRATE, hold > 4 s TEST)
+MODE = "MISSION"
+BUILD_MODES = ("MISSION", "CALIBRATE", "TEST")
 MODE_SELECT_MS = 2000
 
-
-# =============================================================================
-# 1 CONFIG
-# =============================================================================
-
-# ---- 1.1 Ports ---------------------------------------------------------------
+# 1. CONFIGURATION -----------------------------------------------------------
+# The mechanical bumper is the home switch, not the optional Touch LED.
 PORT_Z = Ports.PORT1
-PORT_BUMPER = Ports.PORT2
-PORT_TOUCH = Ports.PORT3        # optional: without a Touch LED the brain buttons are used
+PORT_HOME = Ports.PORT2
+PORT_TOUCH = Ports.PORT3
 PORT_X = Ports.PORT5
 PORT_OPTICAL = Ports.PORT7
 PORT_DISTANCE = Ports.PORT8
 PORT_GRIP = Ports.PORT9
+X_MOTOR_REVERSED = False       # positive degrees must move RIGHT
+Z_MOTOR_REVERSED = False       # positive degrees must extend the arm
 
-X_MOTOR_REVERSED = False    # True if positive motor degrees move AWAY from the facility
-Z_MOTOR_REVERSED = False    # True if positive motor degrees RETRACT the arm
+# MEASURE these positions from the right-hand home switch, in millimetres.
+X_TRAVEL_MIN = -1200.0
+Z_TRAVEL_MAX = 400.0
+HOME_CLEAR_X = -10.0           # release the home switch after zeroing
+SEARCH_START_X = -350.0        # move 350 mm left before searching (placeholder)
+SEARCH_END_X = -1150.0         # finish scanning before the left end of the rail
+MINING_Z_WALL = 350.0          # grab-Z of the background wall
+# Drop poses: deepest first, so the arm avoids already placed cubes.
+# All are placeholders. Teach real positions; each slot is used only once.
+GREEN_SLOTS = ((-250.0, 240.0), (-250.0, 150.0), (-250.0, 60.0))
+RED_SLOTS = ((-140.0, 240.0), (-140.0, 150.0), (-140.0, 60.0))
+BLUE_SLOTS = ((-50.0, 240.0), (-50.0, 150.0), (-50.0, 60.0))
 
-# ---- 1.2 Field geometry [MEASURE on the pad, mm, world frame] ----------------
-CUBE_MM = 75.0              # measured 30.09: edge length (and height) of a cube
-CUBE_GAP_MM = 20.0          # rules 7.2: cube-cube gap 2 +- 0.5 cm
-
-X_TRAVEL_MAX = 1200.0       # MEASURE: largest X the trolley may drive to
-Z_TRAVEL_MAX = 400.0        # MEASURE: full arm extension (L2 R01.GRIP.2: 40 cm)
-Z_SAFE = 5.0                # X only moves while Z <= this (arm clear of cubes)
-
-MINING_X_MIN = 0.0          # MEASURE: mining area, X range of cube centres
-MINING_X_MAX = 800.0        # MEASURE
-MINING_Z_WALL = 350.0       # MEASURE: grab-Z of the far wall; anything this deep = empty
-
-GREEN_X_MIN = 900.0         # MEASURE: facility half closest to the mining area
-GREEN_X_MAX = 1000.0        # MEASURE
-RED_X_MIN = 1020.0          # MEASURE: facility half further away
-RED_X_MAX = 1120.0          # MEASURE
-FACILITY_Z_MIN = 60.0       # MEASURE: shallowest grab-Z where a cube is fully inside
-FACILITY_Z_MAX = 250.0      # MEASURE: deepest grab-Z (open back: stay clear of the edge)
-FACILITY_PITCH_MM = 85.0    # slot spacing inside the facility (cube + 10 mm)
-BLUE_DUMP = (1160.0, 60.0)  # MEASURE/DECIDE: where blue cubes go (x, z)
-UNKNOWN_COLOUR_AS = "green" # colour sensor unsure -> treat as this
-
-# ---- 1.2b Robot geometry [measured 30.09, see docs/measurements.md] ---------
-GRIP_INNER_MM = 89.0        # between the side grabbers (cube rotated 10 deg needs 86.9)
-GRIP_OUTER_MM = 100.0       # outside of the side grabbers (space between neighbours: 105-115)
-GRIP_DEPTH_MM = 80.0        # inner base to grabber tip (cube is 75 deep)
-DIST_SENSOR_DX_MM = 23.0    # distance sensor beam, sideways from gripper centre (sign: CAL)
-DIST_SENSOR_HEIGHT_MM = 45.0  # beam height above the floor (cube is 75 high)
-# Colour sensor: mounted above the held cube, looking DOWN onto its top face,
-# 17 mm away when the cube is pulled in. So colour is read only while holding.
-COLOUR_SENSOR_GAP_MM = 17.0
-
-# ---- 1.3 Calibration results [CAL: filled in by MODE = "CALIBRATE"] ----------
-CALIBRATED = False          # set True once every CAL value below is measured
-X_MM_PER_DEG = 0.10         # CAL "X scale"   (placeholder)
-Z_MM_PER_DEG = 0.10         # CAL "Z scale"   (placeholder)
-GRAB_DIST_MM = 10.0         # CAL "Cube pose": distance reading in the grab pose
-DIST_DX_MM = 0.0            # CAL "Cube pose": add to sweep X to get the cube's gripper X (expect +-23)
-DIST_LAG_S = 0.0            # CAL "Cube pose": distance sensor latency
-CUBE_SEEN_MM = 85.0         # CAL "Cube pose": cube width as the sweep sees it (placeholder)
-HOLD_DIST_MAX_MM = 20.0     # distance reading while a cube is held (ConOps: < 2 cm)
-GRIP_OPEN_DEG = -500        # CAL "Grip" (tested value from template)
-GRIP_CLOSED_DEG = 0         # CAL "Grip" (power-on position)
-HUE_RANGES = {              # CAL "Colour": hue degrees (lo, hi), wraps through 0
-    "red": (330.0, 25.0),
-    "green": (70.0, 170.0),
-    "blue": (180.0, 270.0),
-}
+# CALIBRATE before running a physical mission (see docs/calibration.md).
+CALIBRATED = False
+X_MM_PER_DEG = 0.10
+Z_MM_PER_DEG = 0.10
+GRAB_DIST_MM = 10.0
+DIST_DX_MM = 0.0              # taught gripper centre minus observed scan centre
+DIST_LAG_S = 0.0
+CUBE_SEEN_MM = 75.0           # apparent width of a straight cube at scan speed
+HOLD_DIST_MAX_MM = 20.0
+GRIP_OPEN_DEG = -500
+GRIP_CLOSED_DEG = 0
+HUE_RANGES = {"red": (330.0, 25.0), "green": (70.0, 170.0), "blue": (180.0, 270.0)}
 COLOUR_SAMPLES = 7
-COLOUR_MIN_BRIGHTNESS = 5.0 # accept a hue sample if proximity OR brightness says a cube is there
+COLOUR_MIN_BRIGHTNESS = 5.0
 
-# ---- 1.4 Motion --------------------------------------------------------------
-SPEED_X_TRAVEL = 80         # % empty X moves
-SPEED_X_SCAN = 40           # % X while scanning (resolution = speed * LOOP_MS)
-SPEED_X_CARRY = 50          # % X with a cube (a dropped red costs 75 + Comfy Ride)
-SPEED_Z = 80                # % Z empty
-SPEED_Z_CREEP = 20          # % final approach onto a cube
-SPEED_Z_CARRY = 50          # % Z with a cube
-SPEED_GRIP_OPEN = 20        # % (tested value from template)
-SPEED_GRIP_CLOSE = 50       # %
-SPEED_JOG = 25              # % calibration jogging
-GRIP_TOL_DEG = 30           # open arm must be this close to GRIP_OPEN_DEG
+# Local search. Unknown distance readings never count as clear space.
+CUBE_MM = 75.0
+GRIP_DEPTH_MM = 80.0
+SIDE_GAP_MM = 15.0            # minimum visible clearance on EACH side
+EDGE_MARGIN_MM = 2.0          # additional allowance for edge/sampling error
+WIDTH_TOL_MM = 3.0
+ROTATION_WIDTH_MM = 12.0      # 75 mm cube at 10 degrees projects to about 87 mm
+DEPTH_JUMP_MM = 20.0          # split abrupt steps BETWEEN samples, not a sloping face
+CLEARANCE_DEPTH_MM = 5.0      # space beyond the jaw tips
+SCAN_SAMPLE_MM = 1.0
+SCAN_MAX_SPACING_MM = 2.0    # a larger hole in samples invalidates the window
+DIST_MAX_VALID_MM = 1000.0
 
-MOTOR_MAX_DPS = 720.0       # IQ smart motor free speed at 100 % (120 rpm)
-POS_TOL_MM = 3.0
-MOVE_TIMEOUT_FACTOR = 2.0   # a move may take this x its ideal duration ...
-MOVE_TIMEOUT_EXTRA_MS = 1500  # ... plus this, before it counts as blocked
-APPROACH_STANDOFF_MM = 30.0 # fast Z stops this far before the cube, then creep
-CREEP_OVERSHOOT_MM = 20.0   # creep this far past the expected cube before giving up
-DROP_CONFIRM_SAMPLES = 3    # consecutive "no cube" readings while carrying = lost
-
-# ---- 1.5 Mission -------------------------------------------------------------
-MISSION_S = 600
-EST_CYCLE_S = 30            # L1 R01.GRIP: 30 s per cube; don't start one with less left
-MAX_ATTEMPTS = 2            # per cube position, then it is skipped
-MAX_EMPTY_SCANS = 2         # full scans without a target before parking
-MAX_FAULTS = 3              # consecutive faults before a cool-down pause
-FAULT_PAUSE_MS = 3000
-BATTERY_WARN_PCT = 50
-
-# ---- 1.6 Map / telemetry -----------------------------------------------------
-MAP_BIN_MM = 5.0
-MAP_MAX_GAP_BINS = 1        # a 1-bin dropout inside a cube does not split it
-MAP_DEPTH_JUMP_MM = 25.0    # a depth step bigger than this splits two cubes
-DIST_MAX_VALID_MM = 1000.0  # readings above this = nothing seen
+# Motion: positive degrees are right/out; both scales above must be positive.
+SPEED_HOME = 20
+HOME_TIMEOUT_MS = 120000
+HOME_RELEASE_MAX_MM = 25.0
+HOME_DEBOUNCE_MS = 60
+SPEED_X_TRAVEL = 80
+SPEED_X_SCAN = 25
+SPEED_X_CARRY = 50
+SPEED_Z = 80
+SPEED_Z_CREEP = 20
+SPEED_Z_CARRY = 50
+SPEED_GRIP_OPEN = 20
+SPEED_GRIP_CLOSE = 50
+SPEED_JOG = 25
+GRIP_TOL_DEG = 30
+MOTOR_MAX_DPS = 720.0
+POS_TOL_MM = 1.0
+MOVE_TIMEOUT_FACTOR = 2.0
+MOVE_TIMEOUT_EXTRA_MS = 1500
+Z_SAFE = 2.0
+APPROACH_STANDOFF_MM = 30.0
+CREEP_OVERSHOOT_MM = 20.0
+DROP_CONFIRM_SAMPLES = 3
 LOOP_MS = 15
-ROBOT_PRINT_MS = 200        # live R-line rate during the mission
-LIVE_CAL_MS = 100           # live R-line rate during calibration / test
-SCREEN_W = 160
-SCREEN_H = 108
+MISSION_S = 600
+EST_CYCLE_S = 90             # reserve time for picking/returning before next search
+MAX_PICK_FAILURES = 3
+ROBOT_PRINT_MS = 200
+LIVE_CAL_MS = 100
 
-# ---- 1.7 Calibration routine settings ----------------------------------------
+# Bench calibration settings.
 CAL_Z_STEPS = 8
-CAL_Z_NEAR_MM = 60.0        # auto Z scale stops extending this close to the board
-CAL_Z_MAX_MS = 30000        # ... or after this long
-CAL_CUBE_SWEEP_MM = 100.0   # sweep +- this around the taught cube
+CAL_Z_NEAR_MM = 60.0
+CAL_Z_MAX_MS = 30000
+CAL_CUBE_SWEEP_MM = 110.0
 CAL_SETTLE_MS = 500
-RATE_SWEEP_MM = 300.0       # "Rates" drives X out this far and back
-RATE_POLL_MS = 2            # ... polling this often to catch every sensor update
-RATE_EDGE_TOL_MM = 1.0      # share of the +-2 mm grab margin allowed for sampling error
+RATE_SWEEP_MM = 300.0
+RATE_POLL_MS = 2
+RATE_EDGE_TOL_MM = 1.0
 RATE_MAX_SAMPLES = 400
 
 
-# =============================================================================
-# 2 HAL - the only place that touches vex devices
-# =============================================================================
+# 2. HARDWARE AND MOTION -----------------------------------------------------
 brain = Brain()
 
 
@@ -170,27 +113,20 @@ class MotionError(Exception):
     pass
 
 
-class CubeLost(MotionError):
-    pass
-
-
 class Hardware:
     def __init__(self):
+        self.home = Bumper(PORT_HOME)
         self.touch = Touchled(PORT_TOUCH)
-        self.optical = Optical(PORT_OPTICAL)
+        self.has_touch = self.touch.installed()
         self.distance = Distance(PORT_DISTANCE)
-        self.bumper = Bumper(PORT_BUMPER)
-        # Motor(port, False) could be read as gear ratio 0: only pass True
+        self.optical = Optical(PORT_OPTICAL)
         self.mx = Motor(PORT_X, True) if X_MOTOR_REVERSED else Motor(PORT_X)
         self.mz = Motor(PORT_Z, True) if Z_MOTOR_REVERSED else Motor(PORT_Z)
         self.mg = Motor(PORT_GRIP)
-        self.has_touch = self.touch.installed()
 
     def missing(self):
-        """Required devices that are not plugged in (the Touch LED is optional)."""
-        devices = (("optical", self.optical),
-                   ("distance", self.distance), ("bumper", self.bumper),
-                   ("motor X", self.mx), ("motor Z", self.mz), ("grip", self.mg))
+        devices = (("home switch", self.home), ("distance", self.distance),
+                   ("optical", self.optical), ("X", self.mx), ("Z", self.mz), ("grip", self.mg))
         return [name for name, dev in devices if not dev.installed()]
 
     def stop_all(self):
@@ -203,85 +139,45 @@ def now_ms():
 
 
 def median(values):
-    s = sorted(values)
-    return s[len(s) // 2]
-
-
-LED_COLOURS = {"red": Color.RED, "green": Color.GREEN, "blue": Color.BLUE,
-               "yellow": Color.YELLOW, "purple": Color.PURPLE, "white": Color.WHITE}
-
-
-def set_led(hw, name):
-    if not hw.has_touch:
-        return
-    if name == "off":
-        hw.touch.off()
-    else:
-        hw.touch.set_color(LED_COLOURS[name])
+    return sorted(values)[len(values) // 2]
 
 
 def distance_mm(hw):
-    """One reading in mm, or None if nothing is in range."""
     d = hw.distance.object_distance(MM)
-    if d <= 0 or d > DIST_MAX_VALID_MM:
-        return None
-    return d
+    return d if 0 < d <= DIST_MAX_VALID_MM else None
 
 
 def distance_median(hw, n):
-    vals = []
+    values = []
     for _ in range(n):
         d = distance_mm(hw)
         if d is not None:
-            vals.append(d)
+            values.append(d)
         wait(LOOP_MS, MSEC)
-    if len(vals) < n // 2 + 1:
-        return None
-    return median(vals)
+    return median(values) if len(values) > n // 2 else None
 
 
 def hue_median(hues):
-    """Median on the hue circle: reds sit on both sides of 0."""
     if max(hues) - min(hues) > 180:
         hues = [h + 360 if h < 180 else h for h in hues]
     return median(hues) % 360
 
 
 def classify_hue(h):
-    if h is None:
-        return "unknown"
-    for name in ("red", "green", "blue"):
-        lo, hi = HUE_RANGES[name]
-        if (lo <= h <= hi) if lo <= hi else (h >= lo or h <= hi):
-            return name
+    if h is not None:
+        for colour in ("red", "green", "blue"):
+            lo, hi = HUE_RANGES[colour]
+            if (lo <= h <= hi) if lo <= hi else (h >= lo or h <= hi):
+                return colour
     return "unknown"
 
 
-def read_hue(hw, n):
-    """Median hue of n samples taken while the sensor sees an object, else None."""
-    hues = []
-    for _ in range(n):
-        if hw.optical.is_near_object() or hw.optical.brightness() >= COLOUR_MIN_BRIGHTNESS:
-            hues.append(hw.optical.hue())
-        wait(LOOP_MS, MSEC)
-    if len(hues) < n // 2 + 1:
-        return None
-    return hue_median(hues)
-
-
 def buttons(hw):
-    """(left, right, check, touch) pressed states."""
     return (brain.buttonLeft.pressing(), brain.buttonRight.pressing(),
             brain.buttonCheck.pressing(), hw.has_touch and hw.touch.pressing())
 
 
-def start_pressed(hw):
-    """The start button: Touch LED if plugged in, else the brain Check button."""
-    return hw.touch.pressing() if hw.has_touch else brain.buttonCheck.pressing()
-
-
 def wait_press(hw):
-    """Block until a button is pressed and released. Returns 'L', 'R', 'C' or 'T'."""
     while True:
         l, r, c, t = buttons(hw)
         if l or r or c or t:
@@ -292,36 +188,36 @@ def wait_press(hw):
 
 
 def say(*lines):
-    """Show short lines on the brain screen and echo them to the console."""
     brain.screen.clear_screen()
     for i, line in enumerate(lines):
         brain.screen.set_cursor(i + 1, 1)
         brain.screen.print(line)
-    print("# " + " | ".join(lines))
+    print("E," + " | ".join(lines))
 
 
-# =============================================================================
-# 3 AXES - degrees exist only inside this section
-# =============================================================================
+_t_live = [0]
+
+
+def live(r, d, period=ROBOT_PRINT_MS):
+    if now_ms() - _t_live[0] < period:
+        return
+    _t_live[0] = now_ms()
+    x, z = r.X.mm(), r.Z.mm()
+    if d is None:
+        print("R,%.1f,%.1f,-1" % (x, z))
+    else:
+        print("R,%.1f,%.1f,%.1f,%.1f,%.1f" % (x, z, d, x + DIST_DX_MM, z + d - GRAB_DIST_MM))
+
+
 class Axis:
-    """Linear axis: mm = deg * mm_per_deg. Zero = encoder position at program start."""
-
-    def __init__(self, name, motor, mm_per_deg, lo, hi):
-        self.name = name
-        self.m = motor
-        self.k = mm_per_deg
-        self.lo = lo
-        self.hi = hi
-        self.timeout = 0
+    def __init__(self, name, motor, scale, lo, hi):
+        self.name, self.m, self.k = name, motor, scale
+        self.lo, self.hi = lo, hi
         self.target = 0.0
         self.t_start = 0
+        self.timeout = 0
         motor.set_stopping(HOLD)
         motor.set_position(0, DEGREES)
-
-    def expected_ms(self, dist_mm, speed):
-        """Generous duration for a move: ideal time * factor + extra."""
-        mm_per_s = abs(self.k) * MOTOR_MAX_DPS * speed / 100.0
-        return MOVE_TIMEOUT_FACTOR * 1000.0 * abs(dist_mm) / mm_per_s + MOVE_TIMEOUT_EXTRA_MS
 
     def deg(self):
         return self.m.position(DEGREES)
@@ -329,37 +225,36 @@ class Axis:
     def mm(self):
         return self.deg() * self.k
 
-    def start_move(self, mm, speed):
-        """Non-blocking move; poll arrived() and check()."""
-        self.target = min(max(mm, self.lo), self.hi)
+    def expected_ms(self, distance, speed):
+        mm_s = self.k * MOTOR_MAX_DPS * speed / 100.0
+        return MOVE_TIMEOUT_FACTOR * abs(distance) * 1000.0 / mm_s + MOVE_TIMEOUT_EXTRA_MS
+
+    def start_move(self, target, speed):
+        if not self.lo <= target <= self.hi:
+            raise MotionError("%s target outside travel: %.1f" % (self.name, target))
+        self.target = target
         self.t_start = now_ms()
-        self.timeout = self.expected_ms(self.target - self.mm(), speed)
-        self.m.set_timeout(self.timeout + 500, MSEC)    # motor's own default gives up at 10 s
-        self.m.spin_to_position(self.target / self.k, DEGREES, speed, PERCENT, False)
+        self.timeout = self.expected_ms(target - self.mm(), speed)
+        self.m.set_timeout(self.timeout + 500, MSEC)
+        self.m.spin_to_position(target / self.k, DEGREES, speed, PERCENT, False)
 
     def arrived(self):
         return abs(self.mm() - self.target) <= POS_TOL_MM
 
     def check(self):
-        """Raise MotionError if the move timed out or the motor gave up early."""
-        elapsed = now_ms() - self.t_start
-        if elapsed > self.timeout:
-            self.halt()
-            raise MotionError("%s timeout at %.0f mm (target %.0f)" % (self.name, self.mm(), self.target))
-        if elapsed > 150 and self.m.is_done() and not self.arrived():
-            self.halt()
-            raise MotionError("%s blocked at %.0f mm (target %.0f)" % (self.name, self.mm(), self.target))
+        if now_ms() - self.t_start > self.timeout:
+            raise MotionError(self.name + " motion timed out")
+        if now_ms() - self.t_start > 150 and self.m.is_done() and not self.arrived():
+            raise MotionError(self.name + " motion blocked")
 
-    def move_to(self, mm, speed):
-        self.start_move(mm, speed)
-        while not self.arrived():
-            self.check()
-            wait(LOOP_MS, MSEC)
-
-    def move_deg(self, deg, speed):
-        """Raw move for calibration (no mm scale, no soft limits)."""
-        self.m.set_timeout(self.expected_ms((deg - self.deg()) * self.k, speed), MSEC)
-        self.m.spin_to_position(deg, DEGREES, speed, PERCENT, True)
+    def move_to(self, target, speed):
+        self.start_move(target, speed)
+        try:
+            while not self.arrived():
+                self.check()
+                wait(LOOP_MS, MSEC)
+        finally:
+            self.halt()
 
     def jog(self, speed):
         self.m.spin(FORWARD, speed, PERCENT)
@@ -372,44 +267,31 @@ class Axis:
 
 
 class Gripper:
-    """Arm that drops behind a cube (closed) and lifts clear of it (open)."""
-
     def __init__(self, motor):
-        self.name = "G"
         self.m = motor
         motor.set_stopping(HOLD)
         motor.set_position(0, DEGREES)
 
-    def _go(self, deg, speed):
-        # Done when the target is reached or the arm stalls (e.g. against a cube).
-        timeout = (MOVE_TIMEOUT_FACTOR * 1000.0 * abs(deg - self.deg()) / (MOTOR_MAX_DPS * speed / 100.0)
-                   + MOVE_TIMEOUT_EXTRA_MS)
-        self.m.set_timeout(timeout, MSEC)
-        self.m.spin_to_position(deg, DEGREES, speed, PERCENT, False)
-        t0 = now_ms()
-        while now_ms() - t0 < timeout:
-            wait(LOOP_MS, MSEC)
-            if self.m.is_done():
-                return
-            if now_ms() - t0 > 200 and abs(self.m.velocity(PERCENT)) < 2:
-                return
+    def move(self, degrees, speed):
+        self.m.set_timeout(5000, MSEC)
+        self.m.spin_to_position(degrees, DEGREES, speed, PERCENT, True)
+        if abs(self.deg() - degrees) > GRIP_TOL_DEG:
+            raise MotionError("gripper did not reach %.0f degrees" % degrees)
 
     def open(self):
-        self._go(GRIP_OPEN_DEG, SPEED_GRIP_OPEN)
-        if abs(self.deg() - GRIP_OPEN_DEG) > GRIP_TOL_DEG:
-            raise MotionError("grip did not open (%.0f deg)" % self.deg())
+        self.move(GRIP_OPEN_DEG, SPEED_GRIP_OPEN)
 
     def close(self):
-        self._go(GRIP_CLOSED_DEG, SPEED_GRIP_CLOSE)
+        self.move(GRIP_CLOSED_DEG, SPEED_GRIP_CLOSE)
+
+    def deg(self):
+        return self.m.position(DEGREES)
 
     def jog(self, speed):
         self.m.spin(FORWARD, speed, PERCENT)
 
     def halt(self):
         self.m.stop()
-
-    def deg(self):
-        return self.m.position(DEGREES)
 
     def show(self):
         return "G %.0fdeg" % self.deg()
@@ -418,520 +300,304 @@ class Gripper:
 class Robot:
     def __init__(self):
         self.hw = Hardware()
-        self.X = Axis("X", self.hw.mx, X_MM_PER_DEG, 0.0, X_TRAVEL_MAX)
+        self.X = Axis("X", self.hw.mx, X_MM_PER_DEG, X_TRAVEL_MIN, 0.0)
         self.Z = Axis("Z", self.hw.mz, Z_MM_PER_DEG, 0.0, Z_TRAVEL_MAX)
         self.grip = Gripper(self.hw.mg)
+        self.homed = False
 
     def stop_all(self):
         self.hw.stop_all()
 
+    def home_x(self):
+        """Seek the RIGHT switch, zero X, then move left clear of it."""
+        if self.Z.mm() > Z_SAFE:
+            raise MotionError("retract Z before homing")
+        if not self.hw.home.installed():
+            raise MotionError("home switch missing")
+        self.homed = False
+        say("HOME", "moving right to switch")
+        t0, x0 = now_ms(), self.X.mm()
+        try:
+            # An initially pressed switch must release, then be approached again.
+            while self.hw.home.pressing():
+                if now_ms() - t0 > 5000 or abs(self.X.mm() - x0) > HOME_RELEASE_MAX_MM:
+                    raise MotionError("home switch stuck pressed")
+                self.X.jog(-SPEED_HOME)
+                wait(LOOP_MS, MSEC)
+            self.X.halt()
+            t0, x0 = now_ms(), self.X.mm()
+            last_motion, last_x = t0, x0
+            while True:
+                if now_ms() - t0 > HOME_TIMEOUT_MS or self.X.mm() - x0 > -X_TRAVEL_MIN + HOME_RELEASE_MAX_MM:
+                    raise MotionError("home switch not reached")
+                if self.hw.home.pressing():
+                    self.X.halt()       # stop pushing before debouncing contact
+                    wait(HOME_DEBOUNCE_MS, MSEC)
+                    if self.hw.home.pressing():
+                        break
+                if abs(self.X.mm() - last_x) >= 0.5:
+                    last_motion, last_x = now_ms(), self.X.mm()
+                elif now_ms() - last_motion > 1500:
+                    raise MotionError("X stalled before home switch")
+                self.X.jog(SPEED_HOME)
+                wait(LOOP_MS, MSEC)
+            self.X.m.set_position(0, DEGREES)
+            self.X.move_to(HOME_CLEAR_X, SPEED_HOME)
+            if self.hw.home.pressing():
+                raise MotionError("home switch did not release")
+            self.homed = True
+            say("HOME set", "X=0 at right switch")
+        finally:
+            self.X.halt()
 
-# =============================================================================
-# 4 WORLD MAP - pure python, testable on a laptop
-# =============================================================================
-FAR = 1.0e9     # bin was scanned and nothing was there
+    def move_x(self, target, speed, carrying=False):
+        if not self.homed or self.Z.mm() > Z_SAFE:
+            raise MotionError("X needs home and retracted Z")
+        self.X.start_move(target, speed)
+        lost = 0
+        try:
+            while not self.X.arrived():
+                self.X.check()
+                if target > self.X.mm() and self.hw.home.pressing():
+                    raise MotionError("unexpected home switch during travel")
+                d = distance_mm(self.hw)
+                if carrying:
+                    lost = lost + 1 if d is None or d > HOLD_DIST_MAX_MM else 0
+                    if lost >= DROP_CONFIRM_SAMPLES:
+                        raise MotionError("cube lost during transport")
+                live(self, d)
+                wait(LOOP_MS, MSEC)
+        finally:
+            self.X.halt()
 
 
-class Cube:
-    def __init__(self, x, z, w):
-        self.x = x          # gripper X to grab it
-        self.z = z          # gripper Z to grab it
-        self.w = w          # width as seen by the sweep
-        self.colour = None
+# 3. LOCAL SEARCH -----------------------------------------------------------
+class CubeSearch:
+    """One small moving window, ordered right to left. No persistent field map.
 
-
-class WorldMap:
-    """Distance profile along X ("the graph") + cubes segmented from it.
-
-    z[i] is the grab-Z of the nearest surface seen in bin i:
-      None = never scanned, FAR = scanned and empty.
-    A new pass overwrites the bins it crosses, so a removed cube disappears
-    and whatever stood behind it shows up on the next pass.
+    Samples use gripper-alignment X and grab-Z. Only complete cube-width runs with
+    measured free space on BOTH sides can become targets. A deeper return is
+    clear only if it lies beyond the entire jaw path, including the jaw tips.
     """
-
-    def __init__(self, x_min, x_max, bin_mm, z_empty):
-        self.x_min = x_min
-        self.bin = bin_mm
-        self.z_empty = z_empty
-        self.n = int((x_max - x_min) / bin_mm) + 1
-        self.z = [None] * self.n
-        self.stamp = [0] * self.n
-        self.pass_no = 0
-        self.cubes = []
-        self.failed = []    # [x, attempts]
-        self.changed = []   # bin indices changed since the last telemetry flush
-
-    def bin_of(self, x):
-        i = int((x - self.x_min) / self.bin)
-        return i if 0 <= i < self.n else -1
-
-    def x_of(self, i):
-        return self.x_min + (i + 0.5) * self.bin
-
-    def new_pass(self):
-        self.pass_no += 1
+    def __init__(self):
+        self.samples = []
 
     def add(self, x, z):
-        """One sample: z = grab-Z of the nearest thing at x, or None if nothing."""
-        i = self.bin_of(x)
-        if i < 0:
-            return
-        if z is None or z >= self.z_empty:
-            z = FAR
-        if self.stamp[i] != self.pass_no:
-            self.stamp[i] = self.pass_no
-        elif self.z[i] is not None and z >= self.z[i]:
-            return
-        if self.z[i] != z:
-            self.z[i] = z
-            self.changed.append(i)
+        if self.samples:
+            step = self.samples[-1][0] - x
+            if step < SCAN_SAMPLE_MM:
+                return None
+            if step > SCAN_MAX_SPACING_MM:
+                self.samples = []
+        self.samples.append((x, z))
+        span = CUBE_SEEN_MM + ROTATION_WIDTH_MM + WIDTH_TOL_MM + 2 * (SIDE_GAP_MM + EDGE_MARGIN_MM) + 4 * SCAN_MAX_SPACING_MM
+        while self.samples[0][0] - x > span:
+            self.samples.pop(0)
+        return self.target()
 
-    def forget(self, x0, x1):
-        for i in range(max(0, self.bin_of(x0)), self.n):
-            if self.x_of(i) > x1:
-                break
-            self.z[i] = None
-            self.changed.append(i)
+    def clear_side(self, index, step, edge, depth):
+        """Require valid deep readings all the way past the requested gap."""
+        while 0 <= index < len(self.samples):
+            x, z = self.samples[index]
+            if z is None or z < depth:
+                return False
+            if abs(x - edge) >= SIDE_GAP_MM + EDGE_MARGIN_MM:
+                return True
+            index += step
+        return False
 
-    def segment(self):
-        """Rebuild self.cubes from the profile."""
-        runs = []
-        start = None
-        last = 0
-        for i in range(self.n):
-            if self.z[i] is not None and self.z[i] < FAR:
-                if start is not None and abs(self.z[i] - self.z[last]) > MAP_DEPTH_JUMP_MM:
-                    runs.append((start, last))      # front cube next to one further back
-                    start = None
-                if start is None:
-                    start = i
-                last = i
-            elif start is not None and i - last > MAP_MAX_GAP_BINS:
-                runs.append((start, last))
-                start = None
-        if start is not None:
-            runs.append((start, last))
-
-        cubes = []
-        for i0, i1 in runs:
-            width = (i1 - i0 + 1) * self.bin
-            if width < CUBE_SEEN_MM * 0.5:
-                continue    # noise
-            count = max(1, int(width / (CUBE_SEEN_MM + CUBE_GAP_MM * 0.5) + 0.5))
-            step = (i1 - i0 + 1) / count
-            for k in range(count):
-                a = i0 + int(k * step)
-                b = i0 + int((k + 1) * step) - 1
-                zs = [self.z[j] for j in range(a, b + 1) if self.z[j] is not None and self.z[j] < FAR]
-                if zs:
-                    cubes.append(Cube((self.x_of(a) + self.x_of(b)) / 2, max(0.0, min(zs)), width / count))
-        self.cubes = cubes
-
-    def attempts(self, x):
-        for entry in self.failed:
-            if abs(entry[0] - x) < CUBE_MM / 2:
-                return entry[1]
-        return 0
-
-    def mark_failed(self, x):
-        for entry in self.failed:
-            if abs(entry[0] - x) < CUBE_MM / 2:
-                entry[1] += 1
-                return
-        self.failed.append([x, 1])
-
-    def nearest(self, x):
-        best = None
-        for c in self.cubes:
-            if abs(c.x - x) < CUBE_MM / 2 and (best is None or abs(c.x - x) < abs(best.x - x)):
-                best = c
-        return best
-
-    def next_target(self, x_ref, z_reach):
-        """Cheapest reachable cube: short X trip to the facility, shallow first."""
-        best = None
-        best_cost = 0
-        for c in self.cubes:
-            if c.z > z_reach or self.attempts(c.x) >= MAX_ATTEMPTS:
+    def target(self):
+        s = self.samples
+        i = 0
+        while i < len(s):
+            z = s[i][1]
+            if z is None or z < 0 or z >= MINING_Z_WALL - CUBE_MM / 2:
+                i += 1
                 continue
-            cost = abs(c.x - x_ref) + c.z
-            if best is None or cost < best_cost:
-                best = c
-                best_cost = cost
-        return best
-
-    def take(self, cube):
-        """Cube has left this spot: drop it and forget its bins until rescanned."""
-        if cube in self.cubes:
-            self.cubes.remove(cube)
-        half = cube.w / 2 + 2 * self.bin
-        self.forget(cube.x - half, cube.x + half)
-
-
-def make_slots(x_min, x_max):
-    """Drop positions inside one facility zone, deepest row first."""
-    pitch = FACILITY_PITCH_MM
-    xs = []
-    x = x_min + CUBE_MM / 2
-    while x + CUBE_MM / 2 <= x_max:
-        xs.append(x)
-        x += pitch
-    if not xs:
-        xs = [(x_min + x_max) / 2]
-    zs = []
-    z = FACILITY_Z_MAX
-    while z >= FACILITY_Z_MIN:
-        zs.append(z)
-        z -= pitch
-    if not zs:
-        zs = [FACILITY_Z_MIN]
-    return [(x, z) for z in zs for x in xs]
-
-
-# =============================================================================
-# 5 TELEMETRY - brain screen + serial lines
-#   D,x,z        profile bin (z = -1: empty, -2: unknown)
-#   C,x,z,colour cube identified
-#   R,x,z        robot position
-#   S,state,ms   state finished
-#   E,text       event
-# =============================================================================
-_t_live = [0]
+            first = i
+            near = far = z
+            i += 1
+            while i < len(s) and s[i][1] is not None:
+                z = s[i][1]
+                if abs(z - s[i - 1][1]) > DEPTH_JUMP_MM:
+                    break
+                near, far = min(near, z), max(far, z)
+                i += 1
+            # A window/scan boundary cannot establish a cube edge.
+            if first == 0 or i == len(s):
+                continue
+            right = (s[first - 1][0] + s[first][0]) / 2
+            left = (s[i - 1][0] + s[i][0]) / 2
+            width = right - left
+            if not CUBE_SEEN_MM - WIDTH_TOL_MM <= width <= CUBE_SEEN_MM + ROTATION_WIDTH_MM + WIDTH_TOL_MM:
+                continue
+            if far - near > CUBE_MM + ROTATION_WIDTH_MM + WIDTH_TOL_MM:
+                continue  # even a rotated cube cannot account for this depth span
+            centre = (left + right) / 2
+            # At pickup the beam is offset from the centred gripper. Use the
+            # face depth THERE, rather than the nearest corner of a rotated cube.
+            beam_x = centre + DIST_DX_MM
+            if not left <= beam_x <= right:
+                continue
+            best = first
+            for j in range(first + 1, i):
+                if abs(s[j][0] - beam_x) < abs(s[best][0] - beam_x):
+                    best = j
+            grab_z = s[best][1]
+            # The deepest visible point may be a side face of this same cube.
+            # Do not add a second full jaw depth behind that point.
+            depth = max(grab_z + GRIP_DEPTH_MM, far) + CLEARANCE_DEPTH_MM
+            if self.clear_side(first - 1, -1, right, depth) and self.clear_side(i, 1, left, depth):
+                return (centre, grab_z)
+        return None
 
 
-def live(r, d, period=ROBOT_PRINT_MS):
-    """Rate-limited live line: R,x,z,d[,hit_x,hit_z]  (d = -1: nothing seen).
-    hit = where the distance beam hits, in world coordinates, with current CAL values."""
-    t = now_ms()
-    if t - _t_live[0] < period:
-        return
-    _t_live[0] = t
-    x = r.X.mm()
-    z = r.Z.mm()
-    if d is None:
-        print("R,%.0f,%.0f,-1" % (x, z))
-    else:
-        print("R,%.0f,%.0f,%.0f,%.0f,%.0f" % (x, z, d, x + DIST_DX_MM, z + d - GRAB_DIST_MM))
-
-
-class Telemetry:
-    def __init__(self, world):
-        self.w = world
-        self.header = ""
-
-    def event(self, text):
-        print("E," + text)
-
-    def state(self, name, ms):
-        print("S,%s,%.0f" % (name, ms))
-
-    def cube(self, c):
-        print("C,%.0f,%.0f,%s" % (c.x, c.z, c.colour))
-
-    def flush_map(self, x_robot):
-        w = self.w
-        for i in w.changed:
-            z = w.z[i]
-            print("D,%.0f,%.0f" % (w.x_of(i), -2 if z is None else (-1 if z >= FAR else z)))
-        w.changed = []
-        self.draw(x_robot)
-
-    def draw(self, x_robot):
-        """Profile on the brain screen: X left->right, Z top->bottom."""
-        w = self.w
-        top = 22
-        scale_x = float(SCREEN_W) / w.n
-        scale_z = float(SCREEN_H - top) / MINING_Z_WALL
-        brain.screen.clear_screen()
-        brain.screen.set_cursor(1, 1)
-        brain.screen.print(self.header)
-        brain.screen.set_pen_color(Color.WHITE)
-        for i in range(w.n):
-            z = w.z[i]
-            if z is not None and z < FAR:
-                px = int(i * scale_x)
-                brain.screen.draw_line(px, top, px, top + int(z * scale_z))
-        for c in w.cubes:
-            brain.screen.draw_rectangle(int((c.x - w.x_min) / w.bin * scale_x) - 2,
-                                        top + int(c.z * scale_z), 5, 5, Color.YELLOW)
-        px = int((x_robot - w.x_min) / w.bin * scale_x)
-        if 0 <= px < SCREEN_W:
-            brain.screen.draw_rectangle(px - 1, top - 4, 3, 4, Color.RED)
-
-
-# =============================================================================
-# 6 SKILLS - each is one step of the ConOps, raises MotionError on trouble
-# =============================================================================
-def retract(r):
-    r.Z.move_to(0.0, SPEED_Z)
-
-
-def sweep_to(r, world, tel, x_target, speed, carrying=False):
-    """The only way X moves. Empty: every sample updates the map.
-    Carrying: the sensor sees the held cube, so it is used to detect a drop."""
-    if r.Z.mm() > Z_SAFE:
-        retract(r)
-    if not carrying:
-        world.new_pass()
-    r.X.start_move(x_target, speed)
-    last_x = r.X.mm()
-    last_t = now_ms()
-    v = 0.0
-    lost = 0
-    while not r.X.arrived():
-        r.X.check()
-        x = r.X.mm()
-        t = now_ms()
-        if t > last_t:
-            v = 0.7 * v + 0.3 * (x - last_x) * 1000.0 / (t - last_t)
-        last_x = x
-        last_t = t
-        d = distance_mm(r.hw)
-        if carrying:
-            lost = lost + 1 if d is None or d > HOLD_DIST_MAX_MM else 0
-            if lost >= DROP_CONFIRM_SAMPLES:
-                r.X.halt()
-                raise CubeLost("cube lost at x=%.0f" % x)
-        else:
+def find_cube(r, failed, deadline):
+    """Travel left to SEARCH_START_X, then scan left until a target is complete."""
+    r.move_x(SEARCH_START_X, SPEED_X_TRAVEL)
+    wait(CAL_SETTLE_MS, MSEC)
+    search = CubeSearch()
+    r.X.start_move(SEARCH_END_X, SPEED_X_SCAN)
+    last_x, last_t = r.X.mm(), now_ms()
+    velocity = 0.0
+    try:
+        while not r.X.arrived() and now_ms() < deadline:
+            r.X.check()
+            x, t = r.X.mm(), now_ms()
+            if t > last_t:
+                velocity = 0.7 * velocity + 0.3 * (x - last_x) * 1000.0 / (t - last_t)
+            last_x, last_t = x, t
+            d = distance_mm(r.hw)
             z = None if d is None else r.Z.mm() + d - GRAB_DIST_MM
-            world.add(x - v * DIST_LAG_S + DIST_DX_MM, z)
-        if v > 0 and r.hw.bumper.pressing():
-            r.X.halt()
-            raise MotionError("bumper hit at x=%.0f" % x)
-        live(r, d)
-        wait(LOOP_MS, MSEC)
-    if not carrying:
-        world.segment()
-        tel.flush_map(r.X.mm())
+            target = search.add(x - velocity * DIST_LAG_S + DIST_DX_MM, z)
+            live(r, d)
+            if target is not None and not any(abs(target[0] - old) < CUBE_MM / 2 for old in failed):
+                if X_TRAVEL_MIN <= target[0] <= 0 and target[1] <= Z_TRAVEL_MAX:
+                    return target
+            wait(LOOP_MS, MSEC)
+    finally:
+        r.X.halt()
+    return None
 
 
-def approach(r, cube):
-    """Arm open, Z out to the cube, stop when the sensor shows the grab pose.
-    Returns False if the cube is not where the map says."""
+# 4. PICK, SORT, REPEAT ------------------------------------------------------
+def pick_cube(r, target):
+    x, z = target
+    r.move_x(x, SPEED_X_SCAN)    # return to the measured centre, including sensor offset
     r.grip.open()
-    r.Z.move_to(max(0.0, cube.z - APPROACH_STANDOFF_MM), SPEED_Z)
-    r.Z.start_move(min(cube.z + CREEP_OVERSHOOT_MM, Z_TRAVEL_MAX), SPEED_Z_CREEP)
-    while True:
-        d = distance_mm(r.hw)
-        live(r, d)
-        if d is not None and d <= GRAB_DIST_MM:
-            r.Z.halt()
-            return True
-        if r.Z.arrived():
-            return False
-        r.Z.check()
-        wait(LOOP_MS, MSEC)
-
-
-def grab(r):
-    """Drop the arm behind the cube, pull it in, confirm it came along."""
-    r.grip.close()
+    r.Z.move_to(max(0.0, z - APPROACH_STANDOFF_MM), SPEED_Z)
+    r.Z.start_move(min(z + CREEP_OVERSHOOT_MM, Z_TRAVEL_MAX), SPEED_Z_CREEP)
+    reached = False
+    try:
+        while True:
+            d = distance_mm(r.hw)
+            live(r, d)
+            if d is not None and d <= GRAB_DIST_MM:
+                reached = True
+                break
+            if r.Z.arrived():
+                break
+            r.Z.check()
+            wait(LOOP_MS, MSEC)
+    finally:
+        r.Z.halt()
+    if reached:
+        r.grip.close()
     r.Z.move_to(0.0, SPEED_Z_CARRY)
     d = distance_median(r.hw, 5)
-    return d is not None and d <= HOLD_DIST_MAX_MM
+    if reached and d is None:
+        raise MotionError("cannot confirm whether cube is held")
+    return reached and d is not None and d <= HOLD_DIST_MAX_MM
 
 
 def identify(r):
-    colour = classify_hue(read_hue(r.hw, COLOUR_SAMPLES))
-    if colour == "unknown":
-        colour = classify_hue(read_hue(r.hw, COLOUR_SAMPLES))
-    return colour
+    for _ in range(2):
+        hues = []
+        for _ in range(COLOUR_SAMPLES):
+            if r.hw.optical.is_near_object() or r.hw.optical.brightness() >= COLOUR_MIN_BRIGHTNESS:
+                hues.append(r.hw.optical.hue())
+            wait(LOOP_MS, MSEC)
+        colour = classify_hue(hue_median(hues)) if len(hues) > COLOUR_SAMPLES // 2 else "unknown"
+        if colour != "unknown":
+            return colour
+    return "unknown"
 
 
-def place(r, world, tel, slot):
+def place_cube(r, slot):
     x, z = slot
-    sweep_to(r, world, tel, x, SPEED_X_CARRY, carrying=True)
+    r.move_x(x, SPEED_X_CARRY, carrying=True)
     r.Z.move_to(z, SPEED_Z_CARRY)
     r.grip.open()
-    retract(r)
+    r.Z.move_to(0.0, SPEED_Z)
+    # Do not count a release if the cube is still in the claw.
+    d = distance_median(r.hw, 5)
+    if d is not None and d <= HOLD_DIST_MAX_MM:
+        raise MotionError("cube still held after release")
+    r.grip.close()
 
 
-# =============================================================================
-# 7 MISSION - state machine. Every state returns the name of the next one.
-# =============================================================================
 class Mission:
     def __init__(self, robot):
         self.r = robot
-        self.w = WorldMap(MINING_X_MIN, MINING_X_MAX, MAP_BIN_MM, MINING_Z_WALL - CUBE_MM / 2)
-        self.tel = Telemetry(self.w)
-        self.t0 = now_ms()
-        self.target = None
-        self.colour = None
-        self.slots = {"green": make_slots(GREEN_X_MIN, GREEN_X_MAX),
-                      "red": make_slots(RED_X_MIN, RED_X_MAX),
-                      "blue": [BLUE_DUMP]}
-        self.slot_used = {"green": 0, "red": 0, "blue": 0}
-        self.empty_scans = 0
-        self.faults = 0
-        self.state_ms = {}
-        self.stats = {"green": 0, "red": 0, "blue": 0, "lost": 0, "failed": 0}
-
-    def time_left(self):
-        return MISSION_S - (now_ms() - self.t0) / 1000.0
 
     def run(self):
-        set_led(self.r.hw, "blue")
-        state = "SCAN"
-        while state != "DONE":
-            t = now_ms()
-            prev = state
-            self.tel.header = "%s %.0fs" % (state, self.time_left())
-            try:
-                state = getattr(self, "s_" + state)()
-            except MotionError as e:
-                state = self.recover(prev, e)
-            dt = now_ms() - t
-            self.tel.state(prev, dt)
-            self.state_ms[prev] = self.state_ms.get(prev, 0) + dt
-        self.report()
-
-    # ---- states ------------------------------------------------------------
-    def s_SCAN(self):
-        """Full pass over the mining area towards whichever end is further away."""
-        x = self.r.X.mm()
-        end = MINING_X_MIN if abs(x - MINING_X_MIN) > abs(x - MINING_X_MAX) else MINING_X_MAX
-        sweep_to(self.r, self.w, self.tel, end, SPEED_X_SCAN)
-        self.faults = 0
-        self.empty_scans += 1
-        return "SELECT"
-
-    def s_SELECT(self):
-        if self.time_left() < EST_CYCLE_S:
-            self.tel.event("out of time")
-            return "PARK"
-        self.target = self.w.next_target(GREEN_X_MIN, Z_TRAVEL_MAX)
-        if self.target is None:
-            return "SCAN" if self.empty_scans < MAX_EMPTY_SCANS else "PARK"
-        self.empty_scans = 0
-        return "APPROACH"
-
-    def s_APPROACH(self):
-        # the move to the cube is itself a scan; re-read the target afterwards
-        sweep_to(self.r, self.w, self.tel, self.target.x, SPEED_X_TRAVEL)
-        fresh = self.w.nearest(self.target.x)
-        if fresh is None:
-            self.tel.event("target gone at x=%.0f" % self.target.x)
-            return "SELECT"
-        self.target = fresh
-        if not approach(self.r, self.target):
-            self.fail("no cube at approach")
-            return "SELECT"
-        return "GRAB"
-
-    def s_GRAB(self):
-        if not grab(self.r):
-            self.fail("grab not confirmed")
-            self.w.take(self.target)    # it may have moved: rescan that spot
-            return "SELECT"
-        return "IDENTIFY"
-
-    def s_IDENTIFY(self):
-        colour = identify(self.r)
-        if colour == "unknown":
-            self.tel.event("colour unknown at x=%.0f" % self.target.x)
-            colour = UNKNOWN_COLOUR_AS
-        self.colour = colour
-        self.target.colour = colour
-        self.tel.cube(self.target)
-        self.w.take(self.target)
-        return "PLACE"
-
-    def s_PLACE(self):
-        slots = self.slots[self.colour]
-        i = self.slot_used[self.colour]
-        if i >= len(slots):
-            self.tel.event("%s zone full, reusing last slot" % self.colour)
-            i = len(slots) - 1
-        place(self.r, self.w, self.tel, slots[i])
-        self.slot_used[self.colour] += 1
-        self.stats[self.colour] += 1
-        self.faults = 0
-        return "SELECT"
-
-    def s_PARK(self):
-        retract(self.r)
-        self.r.grip.close()
-        return "DONE"
-
-    # ---- recovery ----------------------------------------------------------
-    def fail(self, why):
-        self.tel.event("%s at x=%.0f" % (why, self.target.x))
-        self.stats["failed"] += 1
-        self.w.mark_failed(self.target.x)
-        self.r.grip.open()
-        retract(self.r)
-
-    def recover(self, state, err):
-        self.faults += 1
-        self.tel.event("fault in %s: %s" % (state, err))
-        self.r.stop_all()
-        if state == "PARK":
-            return "DONE"
-        if self.faults >= MAX_FAULTS:
-            # parking ends the run and scores nothing more; a pause and retry only costs time
-            set_led(self.r.hw, "red")
-            wait(FAULT_PAUSE_MS, MSEC)
-            set_led(self.r.hw, "blue")
-            self.faults = 0
-        if isinstance(err, CubeLost):
-            self.stats["lost"] += 1
-            return "SELECT"
-        try:
-            retract(self.r)
-        except MotionError:
-            return "DONE"
-        if state in ("APPROACH", "GRAB") and self.target is not None:
-            self.w.mark_failed(self.target.x)
-        if state == "PLACE":
-            return "PLACE"      # still holding the cube: try again
-        return "SELECT"
-
-    def report(self):
-        set_led(self.r.hw, "white")
-        print("E,done: green=%d red=%d blue=%d lost=%d failed=%d time=%.0fs" % (
-            self.stats["green"], self.stats["red"], self.stats["blue"],
-            self.stats["lost"], self.stats["failed"], MISSION_S - self.time_left()))
-        for name in self.state_ms:
-            print("E,time in %s: %.1fs" % (name, self.state_ms[name] / 1000.0))
+        r = self.r
+        slots = {"green": GREEN_SLOTS, "red": RED_SLOTS, "blue": BLUE_SLOTS}
+        used = {"green": 0, "red": 0, "blue": 0}
+        failed = []
+        deadline = now_ms() + MISSION_S * 1000
+        r.home_x()
+        reason = "time reserved for return"
+        while now_ms() < deadline - EST_CYCLE_S * 1000:
+            say("SEARCH", "moving left")
+            target = find_cube(r, failed, deadline - EST_CYCLE_S * 1000)
+            if target is None:
+                reason = "no accessible cube or search time finished"
+                break
+            say("PICK", "X %.1f Z %.1f" % target)
+            if not pick_cube(r, target):
+                failed.append(target[0])
+                say("PICK missed", "skipping this position")
+                if len(failed) >= MAX_PICK_FAILURES:
+                    reason = "pick failure limit"
+                    break
+                continue
+            colour = identify(r)
+            print("C,%.1f,%.1f,%s" % (target[0], target[1], colour))
+            if colour == "unknown" or used[colour] >= len(slots[colour]):
+                r.move_x(HOME_CLEAR_X, SPEED_X_CARRY, carrying=True)
+                say("STOP: cube held", "unknown colour or zone full")
+                return
+            say("RETURN / SORT", colour)
+            place_cube(r, slots[colour][used[colour]])
+            used[colour] += 1
+            print("E,placed %s (%d)" % (colour, used[colour]))
+        r.move_x(HOME_CLEAR_X, SPEED_X_TRAVEL)
+        say("DONE", reason, "G%d R%d B%d" % (used["green"], used["red"], used["blue"]))
 
 
-# =============================================================================
-# 8 CALIBRATION
-#   startup()          every run, before the start button: self check
-#   calibration_menu() MODE = "CALIBRATE": bench routines that print
-#                      paste-ready CONFIG lines. Order: Z, X, Grip, Cube, Colour
-# =============================================================================
 def startup(r):
-    say("LUNAR T2", "self check...")
     missing = r.hw.missing()
     if missing:
-        say("MISSING:", ", ".join(missing))
-        set_led(r.hw, "red")
+        say("MISSING", ", ".join(missing))
         return False
-    r.hw.optical.set_light(100)
-    warnings = []
-    if not r.hw.has_touch:
-        warnings.append("no Touch LED: Check=start")
-    battery = brain.battery.capacity()
-    if battery < BATTERY_WARN_PCT:
-        warnings.append("battery %.0f%%" % battery)
     if not CALIBRATED:
-        warnings.append("placeholder CAL values")
-    # actuator check before the clock starts (FMEA #1/#3): arm must open and close
-    try:
-        r.grip.open()
-    except MotionError as e:
-        say("GRIP FAILED", str(e))
-        set_led(r.hw, "red")
+        say("CALIBRATE FIRST", "see docs/calibration.md")
         return False
-    r.grip.close()
-    if abs(r.grip.deg() - GRIP_CLOSED_DEG) > 50:
-        warnings.append("grip did not close")
-    for w in warnings:
-        print("E,WARNING " + w)
-    set_led(r.hw, "yellow" if warnings else "green")
-    say("READY", "press start", *warnings)
+    if not X_TRAVEL_MIN < SEARCH_END_X < SEARCH_START_X < HOME_CLEAR_X < 0:
+        raise MotionError("check X home/search limits")
+    if X_MM_PER_DEG <= 0 or Z_MM_PER_DEG <= 0 or SIDE_GAP_MM < 15:
+        raise MotionError("check scales and side clearance")
+    for slots in (GREEN_SLOTS, RED_SLOTS, BLUE_SLOTS):
+        for x, z in slots:
+            if not SEARCH_START_X < x < HOME_CLEAR_X or not 0 < z <= Z_TRAVEL_MAX:
+                raise MotionError("check sorting slot positions")
+    r.hw.optical.set_light(100)
+    say("READY", "arm in, gripper closed", "Check or LED = start")
     return True
+
+
+# 5. BENCH CALIBRATION (excluded from the mission build) ---------------------
 
 
 def jog(r, title, axes, dashboard=False):
@@ -949,6 +615,8 @@ def jog(r, title, axes, dashboard=False):
         ax = axes[k]
         live(r, distance_mm(r.hw), LIVE_CAL_MS)
         want = -1 if left else (1 if right else 0)
+        if ax is r.X and want > 0 and r.hw.home.pressing():
+            want = 0
         if want != moving:
             if want == 0:
                 ax.halt()
@@ -970,8 +638,8 @@ def jog(r, title, axes, dashboard=False):
             t_show = now_ms()
             lines = [title, "> " + axes[k].show(), "L/R move, LED or L+R", "=axis. Check ok/hold"]
             if dashboard:
-                lines.append("d=%s hue=%.0f bump=%d" % (distance_mm(r.hw), r.hw.optical.hue(),
-                                                       int(r.hw.bumper.pressing())))
+                lines.append("d=%s hue=%.0f home=%d" % (distance_mm(r.hw), r.hw.optical.hue(),
+                                                       int(r.hw.home.pressing())))
             say(*lines)
         wait(20, MSEC)
 
@@ -1054,22 +722,6 @@ def cal_z_scale(r):
     wait_press(r.hw)
 
 
-def cal_x_scale(r):
-    """X via one ruler measurement over the longest travel."""
-    say("X SCALE", "Arm retracted!", "Tape-mark the carriage.",
-        "Jog X far to facility", "then Check")
-    if not jog(r, "X towards facility", [r.X]):
-        return
-    deg = r.X.deg()
-    print("CAL X moved %.0f deg. Mark again and measure between the marks:" % deg)
-    print("X_MM_PER_DEG = <measured_mm> / %.1f    # cal_x_scale" % deg)
-    if deg < 0:
-        print("# negative: flip X_MOTOR_REVERSED")
-    say("X moved %.0f deg" % deg, "measure the marks", "Check = drive back")
-    wait_press(r.hw)
-    cal_move_deg(r, r.X, 0, SPEED_X_SCAN)
-
-
 def cal_grip(r):
     say("GRIP", "Jog to OPEN (lifted)", "then Check")
     if not jog(r, "grip open", [r.grip]):
@@ -1084,7 +736,7 @@ def cal_grip(r):
 def sweep_edges(r, x_from, x_to, limit):
     """Sweep X and return (centre, width, speed mm/s) of the longest run of
     readings closer than `limit` (= the cube), or None. Streams, stores nothing."""
-    r.X.move_to(x_from, SPEED_X_TRAVEL)
+    r.move_x(x_from, SPEED_X_TRAVEL)
     wait(CAL_SETTLE_MS, MSEC)       # let a lagging sensor catch up before recording
     r.X.start_move(x_to, SPEED_X_SCAN)
     t0 = now_ms()
@@ -1102,6 +754,7 @@ def sweep_edges(r, x_from, x_to, limit):
         else:
             run = None
         wait(LOOP_MS, MSEC)
+    r.X.halt()
     if best is None:
         return None
     v = abs(x_to - x_from) * 1000.0 / max(1, now_ms() - t0)
@@ -1111,6 +764,7 @@ def sweep_edges(r, x_from, x_to, limit):
 def cal_cube(r):
     """Teach the grab pose on a real cube, then sweep it both ways.
     Needs X and Z scale done first."""
+    cal_home(r)
     say("CUBE POSE", "Cube in front of arm.", "Jog X/Z/grip into the", "grab pose, Check")
     if not jog(r, "grab pose", [r.X, r.Z, r.grip]):
         return
@@ -1124,8 +778,8 @@ def cal_cube(r):
     limit = r.Z.mm() + d_grab + CUBE_MM / 2     # cube face seen from Z = 0, plus margin
     r.grip.open()
     r.Z.move_to(0.0, SPEED_Z_CREEP)
-    lo = max(0.0, x_align - CAL_CUBE_SWEEP_MM)
-    hi = min(X_TRAVEL_MAX, x_align + CAL_CUBE_SWEEP_MM)
+    lo = max(X_TRAVEL_MIN, x_align - CAL_CUBE_SWEEP_MM)
+    hi = min(HOME_CLEAR_X, x_align + CAL_CUBE_SWEEP_MM)
     fwd = sweep_edges(r, lo, hi, limit)
     back = sweep_edges(r, hi, lo, limit)
     if fwd is None or back is None:
@@ -1166,14 +820,6 @@ def cal_colour(r):
             min(hues), h, max(hues), median(bright), near, classify_hue(h)))
 
 
-def cal_teach(r):
-    """Jog anywhere, Check prints the pose: facility corners, walls, limits."""
-    n = 0
-    while jog(r, "TEACH pt %d" % (n + 1), [r.X, r.Z, r.grip]):
-        n += 1
-        print("TEACH %d: X=%.1f Z=%.1f grip=%.0f" % (n, r.X.mm(), r.Z.mm(), r.grip.deg()))
-
-
 def cal_distance(r):
     """Live distance readout, compare against a ruler. Any button exits."""
     while True not in buttons(r.hw):
@@ -1206,6 +852,8 @@ def cal_rates(r):
     An edge is seen up to one distance update + one loop late and tagged with an
     encoder value up to one encoder update old: error = v * (Td + Tloop + Tx) / 2
     after DIST_LAG_S removes the mean."""
+    cal_home(r)
+    r.move_x(SEARCH_START_X, SPEED_X_TRAVEL)
     hw = r.hw
     say("RATES", "arm in, X clear", "for %.0f mm" % RATE_SWEEP_MM, "Check = start")
     wait_press(hw)
@@ -1213,7 +861,7 @@ def cal_rates(r):
     cost = []
     for name, f in (("distance", lambda: hw.distance.object_distance(MM)), ("hue", hw.optical.hue),
                     ("encoder", lambda: hw.mx.position(DEGREES)),
-                    ("scan loop", lambda: (r.X.mm(), distance_mm(hw), hw.bumper.pressing()))):
+                    ("scan loop", lambda: (r.X.mm(), distance_mm(hw), hw.home.pressing()))):
         t0 = now_ms()
         for _ in range(n):
             f()
@@ -1224,16 +872,16 @@ def cal_rates(r):
     times = [[], [], []]
     x0 = r.X.mm()
     t1 = t2 = 0
-    for x_to in (x0 + RATE_SWEEP_MM, x0):
+    for x_to in (x0 - RATE_SWEEP_MM, x0):
         r.X.start_move(x_to, SPEED_X_SCAN)
         while not r.X.arrived():
             r.X.check()
             t = now_ms()
             x = r.X.mm()
-            if x_to > x0:       # steady speed between 1/4 and 3/4 of the way out
-                if not t1 and x >= x0 + RATE_SWEEP_MM / 4:
+            if x_to < x0:       # steady speed between 1/4 and 3/4 of the way out
+                if not t1 and x <= x0 - RATE_SWEEP_MM / 4:
                     t1 = t
-                if not t2 and x >= x0 + RATE_SWEEP_MM * 3 / 4:
+                if not t2 and x <= x0 - RATE_SWEEP_MM * 3 / 4:
                     t2 = t
             vals = (hw.distance.object_distance(MM), (hw.optical.hue(), hw.optical.brightness()), hw.mx.position(DEGREES))
             for i in range(3):
@@ -1242,6 +890,7 @@ def cal_rates(r):
                     if len(times[i]) < RATE_MAX_SAMPLES:
                         times[i].append(t)
             wait(RATE_POLL_MS, MSEC)
+        r.X.halt()
     td, to, tx = [median_interval(ts) for ts in times]
     for name, ts, p in (("distance", times[0], td), ("optical", times[1], to), ("encoder", times[2], tx)):
         print("# RATE %s: %d changes, updates every %.0f ms" % (name, len(ts), p))
@@ -1253,8 +902,8 @@ def cal_rates(r):
     v = RATE_SWEEP_MM / 2 * 1000.0 / (t2 - t1)
     loop = max(RATE_POLL_MS, int(td / 2))              # poll twice per distance update
     err_per_v = (td + tx + loop + cost[3]) / 2000.0    # mm of edge error per mm/s
-    v_max = min(RATE_EDGE_TOL_MM / err_per_v, 1000.0 * MAP_BIN_MM / td)
-    pct = min(100, int(SPEED_X_SCAN * v_max / v))
+    v_max = min(RATE_EDGE_TOL_MM / err_per_v, 1000.0 * SCAN_MAX_SPACING_MM / td)
+    pct = max(1, min(100, int(SPEED_X_SCAN * v_max / v)))
     print("# now: %d%% = %.0f mm/s, edge error +-%.1f mm" % (SPEED_X_SCAN, v, v * err_per_v))
     print("SPEED_X_SCAN = %d    # cal_rates: %.0f mm/s, edge error +-%.1f mm" % (pct, v_max, RATE_EDGE_TOL_MM))
     print("LOOP_MS = %d    # cal_rates: distance updates every %.0f ms" % (loop, td))
@@ -1265,16 +914,43 @@ def cal_rates(r):
     wait_press(hw)
 
 
-CAL_ROUTINES = (("Z scale", cal_z_scale), ("X scale", cal_x_scale), ("Grip", cal_grip),
-                ("Cube pose", cal_cube), ("Colour", cal_colour), ("Teach pts", cal_teach),
-                ("Distance", cal_distance), ("Rates", cal_rates))
+def cal_home(r):
+    say("HOME TEST", "arm in, path clear", "Check = home right")
+    wait_press(r.hw)
+    r.home_x()
+
+
+def cal_x_scale(r):
+    say("X SCALE", "arm in, mark carriage", "jog LEFT, then Check")
+    before = r.X.deg()
+    if not jog(r, "X scale (left)", [r.X]):
+        return
+    change = r.X.deg() - before
+    if abs(change) < 100:
+        say("X SCALE", "move further and retry")
+        return
+    print("X_MM_PER_DEG = <measured_mm> / %.1f" % abs(change))
+    say("Measure between marks", "Check = return")
+    wait_press(r.hw)
+    cal_move_deg(r, r.X, before, SPEED_X_SCAN)
+
+
+def cal_teach(r):
+    cal_home(r)
+    while jog(r, "TEACH home-relative", [r.X, r.Z, r.grip]):
+        print("TEACH X=%.1f Z=%.1f grip=%.0f" % (r.X.mm(), r.Z.mm(), r.grip.deg()))
+
+
+CAL_ROUTINES = (("Home", cal_home), ("Z scale", cal_z_scale), ("X scale", cal_x_scale),
+                ("Grip", cal_grip), ("Cube pose", cal_cube), ("Colour", cal_colour),
+                ("Teach pts", cal_teach), ("Distance", cal_distance), ("Rates", cal_rates))
 
 
 def calibration_menu(r):
     r.hw.optical.set_light(100)
     i = 0
     while True:
-        say("CALIBRATE", "< %s >" % CAL_ROUTINES[i][0], "L/R choose", "Check run")
+        say("CALIBRATE", "< %s >" % CAL_ROUTINES[i][0], "L/R choose, Check run")
         b = wait_press(r.hw)
         if b == "L":
             i = (i - 1) % len(CAL_ROUTINES)
@@ -1285,79 +961,49 @@ def calibration_menu(r):
                 CAL_ROUTINES[i][1](r)
             except MotionError as e:
                 r.stop_all()
-                say("MOTION ERROR", str(e))
+                say("STOP", str(e))
                 wait_press(r.hw)
 
 
+def test_mode(r):
+    r.hw.optical.set_light(100)
+    while True:
+        jog(r, "TEST (relative X)", [r.X, r.Z, r.grip], dashboard=True)
+
+
 def motor_check(r):
-    """Move every motor a little on its own and report whether its encoder
-    followed. Clear space around the robot first."""
-    say("MOTOR CHECK", "each motor moves a", "bit and back", "Check = start")
+    say("MOTOR CHECK", "clear space both ways", "Check = start")
     wait_press(r.hw)
-    # X and Z start at their zero end, so they must go positive (towards the
-    # facility / out); the gripper starts closed, so it goes towards open.
-    to_open = 1 if GRIP_OPEN_DEG > GRIP_CLOSED_DEG else -1
-    for name, m, sign in (("X", r.hw.mx, 1), ("Z", r.hw.mz, 1), ("grip", r.hw.mg, to_open)):
+    # X starts with a LEFT move, away from the home end.
+    for name, m, sign in (("X", r.hw.mx, -1), ("Z", r.hw.mz, 1), ("grip", r.hw.mg, -1)):
         before = m.position(DEGREES)
         m.spin(FORWARD, 30 * sign, PERCENT)
         wait(400, MSEC)
         m.stop()
         after = m.position(DEGREES)
-        wait(200, MSEC)
-        m.spin(FORWARD, -30 * sign, PERCENT)
-        wait(400, MSEC)
-        m.stop()
-        moved = abs(after - before)
-        print("CHECK %s: moved %.0f deg (installed=%s) -> %s" % (
-            name, moved, m.installed(),
-            "OK" if moved > 20 else "NOT MOVING (if it pushed into its end stop: set its _REVERSED)"))
-    say("MOTOR CHECK done", "see console", "X %.0f Z %.0f" % (r.hw.mx.position(DEGREES), r.hw.mz.position(DEGREES)))
+        m.set_timeout(2000, MSEC)
+        m.spin_to_position(before, DEGREES, 30, PERCENT, True)
+        print("CHECK %s: moved %.0f deg" % (name, abs(after - before)))
     wait_press(r.hw)
 
 
-def test_mode(r):
-    """Jog every actuator while watching all sensors."""
-    r.hw.optical.set_light(100)
-    while True:
-        jog(r, "TEST", [r.X, r.Z, r.grip], dashboard=True)
-
-
-# =============================================================================
-# 9 ENTRY
-# =============================================================================
+# 6. ENTRY ------------------------------------------------------------------
 def select_mode(r):
-    """MODE from CONFIG, unless a button is pressed during start-up."""
     default = MODE if MODE in BUILD_MODES else BUILD_MODES[0]
-    if len(BUILD_MODES) == 1:
-        return default
-    set_led(r.hw, "purple")
-    say("hold now:", "Left  = CALIBRATE", "Right = TEST", "(else " + default + ")")
+    say("START", "Left=cal, Right=test")
     t0 = now_ms()
     while now_ms() - t0 < MODE_SELECT_MS:
-        if brain.buttonLeft.pressing() or brain.buttonRight.pressing():
-            mode = "CALIBRATE" if brain.buttonLeft.pressing() else "TEST"
-            while brain.buttonLeft.pressing() or brain.buttonRight.pressing():
-                wait(20, MSEC)
-            return mode if mode in BUILD_MODES else default
-        if r.hw.has_touch and r.hw.touch.pressing():
-            while r.hw.touch.pressing():
-                set_led(r.hw, "yellow" if now_ms() - t0 >= 2 * MODE_SELECT_MS else "white")
-                wait(20, MSEC)
-            mode = "TEST" if now_ms() - t0 >= 2 * MODE_SELECT_MS else "CALIBRATE"
-            return mode if mode in BUILD_MODES else default
+        if brain.buttonLeft.pressing():
+            return "CALIBRATE" if "CALIBRATE" in BUILD_MODES else default
+        if brain.buttonRight.pressing():
+            return "TEST" if "TEST" in BUILD_MODES else default
         wait(20, MSEC)
     return default
 
 
 def main():
-    r = Robot()     # start pose = world origin: all encoders zeroed here
+    r = Robot()  # Z/grip start in their known pose; X is not referenced yet.
     try:
-        try:
-            import gc
-            gc.collect()
-            print("E,heap free %d used %d" % (gc.mem_free(), gc.mem_alloc()))
-        except Exception:   # noqa: BLE001 - only a diagnostic
-            pass
         mode = select_mode(r)
         print("E,mode " + mode)
         if mode == "CALIBRATE":
@@ -1369,9 +1015,11 @@ def main():
         else:
             if not startup(r):
                 return
-            while not start_pressed(r.hw):
-                wait(20, MSEC)
+            while wait_press(r.hw) not in ("C", "T"):
+                pass
             Mission(r).run()
+    except MotionError as e:
+        say("STOP", str(e))
     finally:
         r.stop_all()
 
