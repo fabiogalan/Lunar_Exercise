@@ -154,6 +154,10 @@ CAL_Z_NEAR_MM = 60.0        # auto Z scale stops extending this close to the boa
 CAL_Z_MAX_MS = 30000        # ... or after this long
 CAL_CUBE_SWEEP_MM = 100.0   # sweep +- this around the taught cube
 CAL_SETTLE_MS = 500
+RATE_SWEEP_MM = 300.0       # "Rates" drives X out this far and back
+RATE_POLL_MS = 2            # ... polling this often to catch every sensor update
+RATE_EDGE_TOL_MM = 1.0      # share of the +-2 mm grab margin allowed for sampling error
+RATE_MAX_SAMPLES = 400
 
 
 # =============================================================================
@@ -1189,9 +1193,81 @@ def cal_distance(r):
     wait_press(r.hw)
 
 
+def median_interval(ts):
+    """Median time between consecutive change times, 0 if too few."""
+    d = sorted([ts[k + 1] - ts[k] for k in range(len(ts) - 1)])
+    return d[len(d) // 2] if d else 0
+
+
+def cal_rates(r):
+    """How often each sensor really updates, and from that the fastest X scan
+    speed whose sampling error stays within RATE_EDGE_TOL_MM. Run after X scale.
+    Arm retracted, X clear for RATE_SWEEP_MM; cubes in front help (changing readings).
+    An edge is seen up to one distance update + one loop late and tagged with an
+    encoder value up to one encoder update old: error = v * (Td + Tloop + Tx) / 2
+    after DIST_LAG_S removes the mean."""
+    hw = r.hw
+    say("RATES", "arm in, X clear", "for %.0f mm" % RATE_SWEEP_MM, "Check = start")
+    wait_press(hw)
+    n = 200
+    cost = []
+    for name, f in (("distance", lambda: hw.distance.object_distance(MM)), ("hue", hw.optical.hue),
+                    ("encoder", lambda: hw.mx.position(DEGREES)),
+                    ("scan loop", lambda: (r.X.mm(), distance_mm(hw), hw.bumper.pressing()))):
+        t0 = now_ms()
+        for _ in range(n):
+            f()
+        cost.append((now_ms() - t0) / n)
+        print("# RATE call %s: %.2f ms" % (name, cost[-1]))
+
+    last = [None, None, None]
+    times = [[], [], []]
+    x0 = r.X.mm()
+    t1 = t2 = 0
+    for x_to in (x0 + RATE_SWEEP_MM, x0):
+        r.X.start_move(x_to, SPEED_X_SCAN)
+        while not r.X.arrived():
+            r.X.check()
+            t = now_ms()
+            x = r.X.mm()
+            if x_to > x0:       # steady speed between 1/4 and 3/4 of the way out
+                if not t1 and x >= x0 + RATE_SWEEP_MM / 4:
+                    t1 = t
+                if not t2 and x >= x0 + RATE_SWEEP_MM * 3 / 4:
+                    t2 = t
+            vals = (hw.distance.object_distance(MM), (hw.optical.hue(), hw.optical.brightness()), hw.mx.position(DEGREES))
+            for i in range(3):
+                if vals[i] != last[i]:
+                    last[i] = vals[i]
+                    if len(times[i]) < RATE_MAX_SAMPLES:
+                        times[i].append(t)
+            wait(RATE_POLL_MS, MSEC)
+    td, to, tx = [median_interval(ts) for ts in times]
+    for name, ts, p in (("distance", times[0], td), ("optical", times[1], to), ("encoder", times[2], tx)):
+        print("# RATE %s: %d changes, updates every %.0f ms" % (name, len(ts), p))
+    if td <= 0 or t2 <= t1:
+        say("RATES", "no data:", "nothing changed", "or X did not move")
+        wait_press(hw)
+        return
+
+    v = RATE_SWEEP_MM / 2 * 1000.0 / (t2 - t1)
+    loop = max(RATE_POLL_MS, int(td / 2))              # poll twice per distance update
+    err_per_v = (td + tx + loop + cost[3]) / 2000.0    # mm of edge error per mm/s
+    v_max = min(RATE_EDGE_TOL_MM / err_per_v, 1000.0 * MAP_BIN_MM / td)
+    pct = min(100, int(SPEED_X_SCAN * v_max / v))
+    print("# now: %d%% = %.0f mm/s, edge error +-%.1f mm" % (SPEED_X_SCAN, v, v * err_per_v))
+    print("SPEED_X_SCAN = %d    # cal_rates: %.0f mm/s, edge error +-%.1f mm" % (pct, v_max, RATE_EDGE_TOL_MM))
+    print("LOOP_MS = %d    # cal_rates: distance updates every %.0f ms" % (loop, td))
+    print("# colour: optical updates every %.0f ms, %d samples need >= %.0f ms to be independent"
+          % (to, COLOUR_SAMPLES, COLOUR_SAMPLES * to))
+    say("RATES dist %.0f ms" % td, "opt %.0f enc %.0f ms" % (to, tx),
+        "scan %d%% %.0f mm/s" % (pct, v_max), "LOOP_MS %d" % loop)
+    wait_press(hw)
+
+
 CAL_ROUTINES = (("Z scale", cal_z_scale), ("X scale", cal_x_scale), ("Grip", cal_grip),
                 ("Cube pose", cal_cube), ("Colour", cal_colour), ("Teach pts", cal_teach),
-                ("Distance", cal_distance))
+                ("Distance", cal_distance), ("Rates", cal_rates))
 
 
 def calibration_menu(r):

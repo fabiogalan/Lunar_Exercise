@@ -25,7 +25,7 @@ source (`MemoryError: memory allocation failed`). So:
 python3 tools/build.py test          # jog everything, live sensor values
 python3 tools/build.py cal-z         # one calibration routine per build:
 python3 tools/build.py cal-x         #   cal-z cal-x cal-grip cal-cube
-python3 tools/build.py cal-grip      #   cal-colour cal-teach cal-dist
+python3 tools/build.py cal-grip      #   cal-colour cal-teach cal-dist cal-rate
 python3 tools/build.py mission       # the competition program
 ```
 
@@ -67,6 +67,7 @@ It works for any build name (test, check, cal-x, ... mission).
 | 5 | Colour | Grab and pull in a cube, so the colour sensor looks down on its top from 17 mm. Press Check to sample. Do red, green and blue, several cubes each. Set `HUE_RANGES` between the printed min and max values; also note `bright`. Left exits. | `HUE_RANGES`, `COLOUR_MIN_BRIGHTNESS` |
 | 6 | Teach pts | Jog to any point and press Check to print its X, Z. Use it for the facility zones, the mining area edges and the back wall. | the `MEASURE` field values |
 | 7 | Distance | Live readout of the distance sensor. Compare it with a ruler and find its minimum range. | sanity check |
+| 8 | Rates (`cal-rate`) | After X scale. Arm retracted, X clear for 30 cm, a few cubes in front. Press Check. X drives 30 cm out and back at `SPEED_X_SCAN` while polling every 2 ms; each sensor's update period is the median time between value changes. Edge error = v · (T_dist + T_loop + T_enc) / 2, kept within `RATE_EDGE_TOL_MM` (1 mm of the ±2 mm grab margin) and at least one reading per map bin. | `SPEED_X_SCAN`, `LOOP_MS`, optical update period |
 
 After filling everything in, set `CALIBRATED = True`. Until then the robot shows a
 yellow LED and prints a warning at start-up.

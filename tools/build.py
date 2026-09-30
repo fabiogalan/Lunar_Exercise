@@ -36,7 +36,8 @@ TARGETS = {
 }
 # one small program per calibration routine: (build name, routine name in CAL_ROUTINES)
 CAL_PARTS = (("cal-z", "Z scale"), ("cal-x", "X scale"), ("cal-grip", "Grip"), ("cal-cube", "Cube pose"),
-             ("cal-colour", "Colour"), ("cal-teach", "Teach pts"), ("cal-dist", "Distance"))
+             ("cal-colour", "Colour"), ("cal-teach", "Teach pts"), ("cal-dist", "Distance"),
+             ("cal-rate", "Rates"))
 for _name, _routine in CAL_PARTS:
     TARGETS[_name] = (("CALIBRATE",), {"calibration_menu"}, {"Mission", "startup", "test_mode", "motor_check"}, _routine)
 TARGETS["test"] = (("TEST",), {"test_mode"}, {"Mission", "startup", "calibration_menu", "motor_check"})
