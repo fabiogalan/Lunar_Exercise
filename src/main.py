@@ -25,7 +25,7 @@ PORT_GRIP = Ports.PORT9
 
 #0 is defined at the bump sensor, for position of Z distance sensor one must deduct sensor offset! 
 X_MM_PER_DEG = 0.3245  
-Z_MM_PER_DEG = 0.10
+Z_MM_PER_DEG = 0.325        # 01.10: Z moved 83 mm in 255 deg (PICK Z 83, GRAB 255 deg, reading 20); same as X
 
 # COORDINATES. Everything is measured in mm from the bumper (X=0), negative = left.
 # Robot X (encoder) is the trolley: X=0 while the bumper is pressed.
@@ -63,19 +63,22 @@ SEARCH_END_X_TEST = - ( X_MINING_TEST + X_DISPOSAL_TEST + X_STORAGE_TEST) #-1820
 SEARCH_START_X_COMP = 0 - X_DISPOSAL_COMP - X_STORAGE_COMP
 SEARCH_END_X_COMP = - ( X_MINING_COMP + X_DISPOSAL_COMP + X_STORAGE_COMP)
 
-WALL_Z = 350.0              # Z depth of the wall at the end of the production area
+WALL_Z = 325.0              # Z depth of the wall at the end of the production area (01.10: empty floor reads ~345 - GRAB_DISTANCE)
 
-GRAB_DISTANCE = 5.0        # distance from the gripper to the cube when it is grabbed
-HOLD_DISTANCE = 5.0        # distance from the gripper to the cube when it is held securely
+SENSOR_Z_OFFSET = 0.0       # distance sensor is level with the base of the claw (was 25 mm behind it until 01.10)
+GRAB_MARGIN = 20.0          # grab when the reading is within this of SENSOR_Z_OFFSET (noise, creep overshoot; 5 pushed the cube, 01.10)
+GRAB_DISTANCE = SENSOR_Z_OFFSET + GRAB_MARGIN        # distance from the gripper to the cube when it is grabbed
+HOLD_DISTANCE = SENSOR_Z_OFFSET + 2 * GRAB_MARGIN        # distance from the gripper to the cube when it is held securely
 SENSOR_X_OFFSET = 93.0
-SENSOR_CLAW_OFFSET = 17.0   # claw centre -> distance beam (beam is left of the claw centre)
-SENSOR_X_OFFSET = CLAW_X_OFFSET + SENSOR_CLAW_OFFSET   # bumper -> beam: 73 + 17 = 90, replaces the 93 above
+SENSOR_CLAW_OFFSET = 10.0   # claw centre -> distance beam, beam left of the claw centre (was 17 until 01.10)
+SENSOR_X_OFFSET = CLAW_X_OFFSET + SENSOR_CLAW_OFFSET   # bumper -> beam: 73 + 10 = 83, replaces the 93 above
 SENSOR_DELAY_S = 0.0
-GRIP_OPEN_DEG = 80
+GRIP_OPEN_DEG = 90          # 90 grabbed well (01.10)
 GRIP_CLOSED_DEG = 0
 
 # The SEARCH values above are field X for the beam; the robot X that puts the beam there:
-SEARCH_START_X = (SEARCH_START_X_COMP if COMPETITION else SEARCH_START_X_TEST) + SENSOR_X_OFFSET
+SCAN_START_MARGIN = 50.0    # beam starts this far before the mining edge, so a cube on the edge shows its right side
+SEARCH_START_X = (SEARCH_START_X_COMP if COMPETITION else SEARCH_START_X_TEST) + SCAN_START_MARGIN + SENSOR_X_OFFSET
 # The left wall stops the machine, so X ends MACHINE_LENGTH before the end of the field:
 X_WALL = (SEARCH_END_X_COMP if COMPETITION else SEARCH_END_X_TEST) + MACHINE_LENGTH   # -1220 + 228 = -992
 X_MIN = X_WALL + 10.0       # robot X; 10 mm before the wall so the motor does not stall against it
@@ -88,27 +91,38 @@ SEARCH_END_X = X_MIN
 DROP_X = {"red": STORAGE_AREA[0] * 0.25, "green": STORAGE_AREA[0] * 0.75,
           "blue": (DISPOSAL_AREA[0] + DISPOSAL_AREA[1]) / 2} #ACHTUNG: coordintates of the claw, sensor has offset from the center of the claw
 DROP_Z = 100.0
-BOUNDARY_PAUSE_S = 5        # test: stop with the sensor on each area boundary for 5 s (0 = off)
 HUES = {"red": (330.0, 25.0), "green": (70.0, 170.0), "blue": (180.0, 270.0)}
 
 CUBE_SIZE = 75.0
 
 # Detection values. A 75 mm cube rotated 10 degrees appears about 87 mm wide.
-CUBE_WIDTH_MIN = 75.0
-CUBE_WIDTH_MAX = 90.0
+# The scan is cut into segments: a reading more than JUMP_MM from the average of the last
+# SMOOTH_COUNT readings starts a new segment. A segment is a cube when it is CUBE_WIDTH_MIN..MAX long,
+# nearer than the empty floor, and both neighbouring segments are deeper.
+SAMPLE_STEP = 5.0           # mm between the readings the detector uses (the scan loop gives one per ~2.5 mm)
+SMOOTH_COUNT = 5            # readings averaged; the oldest is dropped when a 6th comes
+JUMP_MM = 5.0               # new segment when a reading is this far from that average (7.5 did not split a real
+                            # row of 3 cubes, 5 did: 01.10 logs; face noise is +-2)
+CUBE_WIDTH_MIN = 65.0       # segment length of a cube (01.10 logs: real cubes 70..95; the edges' slopes are
+CUBE_WIDTH_MAX = 100.0      # cut off as separate short segments, so the sensor spread no longer matters)
 
-SIDE_CLEARANCE = 17.0         # 15 mm gap + 2 mm measurement margin
-DEPTH_JUMP = 20.0             # abrupt jump; slopes/corners remain one cube
-GRIP_DEPTH = 80.0       # Z depth of the gripper when closed on a cube
+SENSOR_SPREAD = 0.29          # the distance sensor's light spreads out: a cube looks wider by 0.29 x its distance (tools only)
+                              # (01.10: 75 mm cube read 123 mm wide at 142 mm, 111 mm wide at 127 mm)
+SIDE_CLEARANCE = 17.0         # 15 mm gap + 2 mm measurement margin (not used by the segment detector)
+DEPTH_JUMP = 40.0             # abrupt jump; slopes/corners remain one cube (not used by the segment detector, see JUMP_MM)
+GRIP_DEPTH = 90.0       # Z depth of the gripper when closed on a cube
+POSITION_TOLERANCE = 3.0     # mm a finished motor may be off its target before it counts as blocked
 LOOP_MS = 15                # loop time for all motion and sensor checks
 
 # Speeds in percent.
 HOME_SPEED = 20
-SCAN_SPEED = 25
+SCAN_SPEED = 10             # ~2.5 mm between readings (25 gave 5 mm: the scan loop takes ~90 ms, 01.10)
 TRAVEL_SPEED = 80
 CARRY_SPEED = 50
 Z_SPEED = 40
 Z_CREEP_SPEED = 20
+
+
 
 
 # HARDWARE AND BASIC MOVEMENT ------------------------------------------------
@@ -160,13 +174,15 @@ class Axis:
             raise RobotError(self.name + " target outside travel")
         self.target = target
         self.started = now()
-        ideal_ms = abs(target - self.mm()) * 1000.0 / (self.scale * 720.0 * speed / 100.0)
-        self.timeout = ideal_ms * 2.0 + 1500
+        # twice the ideal time at 720 deg/s x speed %, plus 1.5 s
+        self.timeout = abs(target - self.mm()) * 2000.0 / (self.scale * 7.2 * speed) + 1500
         self.motor.set_timeout(self.timeout + 500, MSEC)
         self.motor.spin_to_position(target / self.scale, DEGREES, speed, PERCENT, False)
 
     def arrived(self):
-        return abs(self.mm() - self.target) <= 1.0
+        # At low speed the motor may report done a few degrees short (01.10: X 1.9 mm short at speed 10).
+        error = abs(self.mm() - self.target)
+        return error <= 1.0 or error <= POSITION_TOLERANCE and self.motor.is_done()
 
     def check(self):
         if now() - self.started > self.timeout:
@@ -174,11 +190,15 @@ class Axis:
         if now() - self.started > 150 and self.motor.is_done() and not self.arrived():
             raise RobotError(self.name + " motion blocked")
 
-    def move(self, target, speed):
+    def move(self, target, speed, tick=None):
+        # The one motion loop: tick() runs every loop; a truthy result stops the move and is returned.
         self.start(target, speed)
         try:
             while not self.arrived():
                 self.check()
+                result = tick and tick()
+                if result:
+                    return result
                 wait(LOOP_MS, MSEC)
         finally:
             self.motor.stop()
@@ -191,7 +211,7 @@ class Robot:
         self.distance = Distance(PORT_DISTANCE)
         self.optical = Optical(PORT_OPTICAL)
         self.x_motor = Motor(PORT_X)
-        self.z_motor = Motor(PORT_Z)
+        self.z_motor = Motor(PORT_Z, True)
         self.grip_motor = Motor(PORT_GRIP)
         self.x = Axis("X", self.x_motor, X_MM_PER_DEG, X_MIN, 0.0)
         self.z = Axis("Z", self.z_motor, Z_MM_PER_DEG, 0.0, Z_MAX)
@@ -214,7 +234,7 @@ class Robot:
         if distance != self.last:
             self.last = distance
             x = self.x.mm()
-            print("%s,%.1f,%.1f,%.0f,%s" % (area(x - SENSOR_X_OFFSET), x - CLAW_X_OFFSET, x - SENSOR_X_OFFSET,
+            print("%s,%.1f,%.1f,%.0f,%s" % ("MINE" if x - SENSOR_X_OFFSET <= MINING_AREA[1] else "DISPOSE" if x - SENSOR_X_OFFSET <= DISPOSAL_AREA[1] else "STORE", x - CLAW_X_OFFSET, x - SENSOR_X_OFFSET,
                                           self.z.mm(), "-" if distance is None else "%.0f" % distance))
 
     def home(self):
@@ -240,35 +260,18 @@ class Robot:
         self.homed = True
 
     def move_x(self, target, speed, carrying=False):
-        # With BOUNDARY_PAUSE_S, first stop with the sensor on every boundary on the way.
-        start = self.x.mm()
-        for edge in sorted((STORAGE_AREA[0], DISPOSAL_AREA[0]), reverse=target < start):
-            x = edge + SENSOR_X_OFFSET
-            if BOUNDARY_PAUSE_S and abs(x - start) > 2 and (start - x) * (x - target) > -4:
-                self.go_x(x, speed, carrying)
-                print("BOUNDARY,field %.0f" % edge)
-                self.last = -1
-                self.report(self.read_distance())
-                wait(BOUNDARY_PAUSE_S, SECONDS)
-        self.go_x(target, speed, carrying)
-
-    def go_x(self, target, speed, carrying):
         if not self.homed or self.z.mm() > 2:
             raise RobotError("home X and retract Z first")
-        self.x.start(target, speed)
-        lost = 0
-        try:
-            while not self.x.arrived():
-                self.x.check()
-                distance = self.read_distance()
-                self.report(distance)
-                if carrying:
-                    lost = lost + 1 if distance is None or distance > HOLD_DISTANCE else 0
-                    if lost >= 3:
-                        raise RobotError("cube lost")
-                wait(LOOP_MS, MSEC)
-        finally:
-            self.x_motor.stop()
+        lost = [0]
+
+        def tick():
+            distance = self.read_distance()
+            self.report(distance)
+            if carrying:
+                lost[0] = lost[0] + 1 if distance is None or distance > HOLD_DISTANCE else 0
+                if lost[0] >= 3:
+                    raise RobotError("cube lost")
+        self.x.move(target, speed, tick)
 
     def grip(self, degrees, speed):
         self.grip_motor.set_timeout(5000, MSEC)
@@ -278,131 +281,103 @@ class Robot:
 
 
 # CUBE SEARCH ---------------------------------------------------------------
+# The detector is compiled on its own when the program starts (exec), not together with the rest of
+# the file: the Brain runs out of memory compiling everything at once (79 KB failed; this way 71 KB).
+# Edit it like normal code, but avoid ''' and backslashes inside.
+exec('''
 class CubeDetector:
-    """Keeps only enough distance samples for one cube and its two side gaps."""
+    # Cuts the scan into segments of similar depth, one reading per SAMPLE_STEP mm, keeping only the
+    # last SMOOTH_COUNT depths of the current segment (memory). A cube face is a flat step; the sensor
+    # turns its edges into slopes, which become short separate segments. Inside a row of cubes each
+    # gap (rule 7.2: >= 2 cm) reads deeper and splits the row into one segment per cube.
     def __init__(self):
-        self.samples = []              # (corrected X, grab Z)
+        self.last_x = None
+        self.recent = []                # depths of the current segment, at most SMOOTH_COUNT
+        self.start = self.end = self.nearest = None
+        self.before = 9999              # average depth of the previous segment
 
     def add(self, x, z):
-        if self.samples:
-            spacing = self.samples[-1][0] - x
-            if spacing < 1.0:
+        if self.last_x is not None and self.last_x - x < SAMPLE_STEP:
+            return None
+        self.last_x = x
+        z = 9999 if z is None else z     # no reading: nothing near
+        if self.recent:
+            average = sum(self.recent) / len(self.recent)
+            if abs(z - average) <= JUMP_MM:
+                self.recent = (self.recent + [z])[-SMOOTH_COUNT:]
+                self.end, self.nearest = x, min(self.nearest, z)
+                if len(self.first) < SMOOTH_COUNT:
+                    self.first.append(z)
                 return None
-            if spacing > 10.0:                  # a gap in the data, not just a slow loop (robot: ~2 mm per loop)
-                self.samples = []
-        self.samples.append((x, z))
-        while self.samples[0][0] - x > 132:
-            self.samples.pop(0)
-        return self.find_target()
+            found = self.cube(z > average)
+            self.before = average
+        else:
+            found = None
+        self.recent, self.first, self.start, self.end, self.nearest = [z], [z], x, x, z
+        return found
 
-    def side_is_clear(self, index, direction, edge, required_depth):
-        while 0 <= index < len(self.samples):
-            x, z = self.samples[index]
-            if z is None or z < required_depth:
-                return False
-            if abs(x - edge) >= SIDE_CLEARANCE:
-                return True
-            index += direction
-        return False
-
-    def find_target(self):
-        s = self.samples
-        i = 0
-        while i < len(s):
-            z = s[i][1]
-            if z is None or z >= WALL_Z - CUBE_SIZE / 2:#TODO make a glb variable 
-                i += 1
-                continue
-            first = i
-            nearest = deepest = z
-            i += 1
-            # A rotated cube produces continuous slopes and a slope change at
-            # its corner. Only an abrupt distance jump ends the cube profile.
-            while i < len(s) and s[i][1] is not None:
-                z = s[i][1]
-                if abs(z - s[i - 1][1]) > DEPTH_JUMP:
-                    break
-                nearest, deepest = min(nearest, z), max(deepest, z)
-                i += 1
-            if first == 0 or i == len(s):
-                continue                    # both outer edges are not known yet
-            right = (s[first - 1][0] + s[first][0]) / 2
-            left = (s[i - 1][0] + s[i][0]) / 2
-            width = right - left
-            if width < CUBE_WIDTH_MIN or width > CUBE_WIDTH_MAX:
-                continue
-            centre = (left + right) / 2
-            beam_x = centre - SENSOR_CLAW_OFFSET    # beam while the claw is on the cube
-            sample = min(range(first, i), key=lambda j: abs(s[j][0] - beam_x))
-            grab_z = s[sample][1]
-            clear_depth = max(grab_z + GRIP_DEPTH, deepest) + 5
-            if self.side_is_clear(first - 1, -1, right, clear_depth) and \
-                    self.side_is_clear(i, 1, left, clear_depth):
-                return centre, grab_z
+    def cube(self, next_deeper=True):
+        # The segment just ended (or the scan ended): a cube if long enough, nearer than the floor and
+        # with deeper neighbours on both sides (a nearer neighbour would block the side arms).
+        if not self.recent:
+            return None
+        average = sum(self.recent) / len(self.recent)
+        if (next_deeper and self.before > average and average < WALL_Z - 5
+                and CUBE_WIDTH_MIN <= self.start - self.end <= CUBE_WIDTH_MAX):
+            # A rotated cube shows its long face (this segment, sloped) and a short steep side face at its
+            # nearer end, cut off as a separate segment. The long face's depth changes by 75 sin(angle), twice
+            # the shift that hides: move the centre towards the nearer end by half that depth difference.
+            slope = average - sum(self.first) / len(self.first)
+            return (self.start + self.end + slope) / 2, self.nearest
         return None
-
-
-def area(x):
-    # field X -> area code
-    for name, (left, right) in (("MINE", MINING_AREA), ("DISPOSE", DISPOSAL_AREA), ("STORE", STORAGE_AREA)):
-        if left <= x <= right:
-            return name
-    return "OUT"
+''')
 
 
 def find_cube(robot, failed):
+    robot.grip(GRIP_OPEN_DEG, 50)       # closed side arms sit in front of the sensor (reads ~90 everywhere, 01.10)
     robot.move_x(SEARCH_START_X, TRAVEL_SPEED)
     wait(300, MSEC)
     detector = CubeDetector()
-    robot.x.start(SEARCH_END_X, SCAN_SPEED)
-    old_x, old_time, velocity = robot.x.mm(), now(), 0.0
-    try:
-        while not robot.x.arrived():
-            robot.x.check()
-            x, time = robot.x.mm(), now()
-            if time > old_time:
-                velocity = 0.7 * velocity + 0.3 * (x - old_x) * 1000.0 / (time - old_time)
-            old_x, old_time = x, time
-            distance = robot.read_distance()
-            robot.report(distance)
-            z = None if distance is None else distance - GRAB_DISTANCE
-            target = detector.add(x - velocity * SENSOR_DELAY_S - SENSOR_X_OFFSET, z)   # field X
-            if target and not any(abs(target[0] - position) < CUBE_SIZE / 2 for position in failed):
-                return target
-            wait(LOOP_MS, MSEC)
-    finally:
-        robot.x_motor.stop()
-    return None
+
+    def tick():
+        x = robot.x.mm()        # SENSOR_DELAY_S is not applied (velocity estimate removed to save memory)
+        distance = robot.read_distance()
+        robot.report(distance)
+        z = None if distance is None else distance - GRAB_DISTANCE
+        target = detector.add(x - SENSOR_X_OFFSET, z)   # field X
+        if target and not any(abs(target[0] - position) < CUBE_SIZE / 2 for position in failed):
+            return target
+    target = robot.x.move(SEARCH_END_X, SCAN_SPEED, tick)
+    if target is None:
+        # Scan end: the last segment has not ended; judge it as if floor followed (rule 7.2 keeps the
+        # next cube >= 2 cm away; 01.10: a cube 12 mm before the scan end).
+        target = detector.cube()
+        if target and any(abs(target[0] - position) < CUBE_SIZE / 2 for position in failed):
+            target = None
+    return target
 
 
 # PICK AND SORT --------------------------------------------------------------
 def held_distance(robot):
     values = []
     for _ in range(5):
-        value = robot.read_distance()
-        if value is not None:
-            values.append(value)
+        values.append(robot.read_distance() or 9999)     # no reading counts as far away
         wait(LOOP_MS, MSEC)
-    return sorted(values)[len(values) // 2] if len(values) >= 3 else None
+    return sorted(values)[2]                              # median of 5
 
 
 def pick(robot, target):
     x, z = target                       # field X of the cube centre
     robot.move_x(x + CLAW_X_OFFSET, SCAN_SPEED)
     robot.grip(GRIP_OPEN_DEG, 20)
-    robot.z.move(max(0, z - 30), Z_SPEED)
-    robot.z.start(min(z + 20, Z_MAX), Z_CREEP_SPEED)
-    reached = False
-    try:
-        while not robot.z.arrived():
-            distance = robot.read_distance()
-            if distance is not None and distance <= GRAB_DISTANCE:
-                reached = True
-                break
-            robot.z.check()
-            wait(LOOP_MS, MSEC)
-    finally:
-        robot.z_motor.stop()
+
+    def touching():
+        distance = robot.read_distance()
+        return distance is not None and distance <= GRAB_DISTANCE
+    # The fast part also watches the sensor: Z_MM_PER_DEG may be off, so the estimate z may be too far.
+    reached = robot.z.move(max(0, z - 30), Z_SPEED, touching) or \
+        robot.z.move(min(z + 20, Z_MAX), Z_CREEP_SPEED, touching)
+    print("GRAB,deg,reading", robot.z_motor.position(DEGREES), robot.read_distance())   # Z_MM_PER_DEG = (PICK Z + GRAB_DISTANCE - reading) / deg
     if reached:
         robot.grip(GRIP_CLOSED_DEG, 50)
     robot.z.move(0, CARRY_SPEED)
@@ -433,6 +408,8 @@ def place(robot, name):
     robot.z.move(DROP_Z, CARRY_SPEED)
     robot.grip(GRIP_OPEN_DEG, 20)
     robot.z.move(0, Z_SPEED)
+    if (robot.read_distance() or 9999) <= HOLD_DISTANCE:     # still something in the claw
+        raise RobotError("cube not released")
     robot.grip(GRIP_CLOSED_DEG, 50)
 
 
@@ -441,8 +418,7 @@ def run(robot):
     failed = []
     end_time = now() + 600000
     robot.home()
-    print("area,arm X,sensor X,Z,distance")
-    print("AREAS (field X) store", STORAGE_AREA, "dispose", DISPOSAL_AREA, "mine", MINING_AREA, "drop", DROP_X)
+    print("area,arm X,sensor X,Z,distance", STORAGE_AREA, DISPOSAL_AREA, MINING_AREA)   # + store, dispose, mine (field X)
     while now() < end_time - 90000:
 
         #check limits ? 
@@ -471,14 +447,9 @@ def main():
     robot = None
     try:
         robot = Robot()
-        missing = []
-        for name, device in (("bumper", robot.bumper), ("distance", robot.distance),
-                             ("optical", robot.optical), ("X", robot.x_motor),
-                             ("Z", robot.z_motor), ("grip", robot.grip_motor)):
-            if not device.installed():
-                missing.append(name)
-        if missing:
-            raise RobotError("missing: " + ", ".join(missing))
+        for name in ("bumper", "distance", "optical", "x_motor", "z_motor", "grip_motor"):
+            if not getattr(robot, name).installed():
+                raise RobotError("missing: " + name)
         if not MANUAL_VALUES_SET:
             raise RobotError("enter manual values, then set MANUAL_VALUES_SET=True")
         robot.optical.set_light(100)
@@ -499,26 +470,26 @@ def main():
 
 if __name__ == "__main__":
 
-    """
+    # (test block kept as comments: a string costs compile memory, comments do not)
 
-    #for example, test moving 
-    robot = Robot()
-    missing = []
-            for name, device in (("bumper", robot.bumper), ("distance", robot.distance),
-                                 ("optical", robot.optical), ("X", robot.x_motor),
-                                 ("Z", robot.z_motor), ("grip", robot.grip_motor)):
-                if not device.installed():
-                    missing.append(name)
-    if missing: print("missing: " + ", ".join(missing))
+    #for example, test moving
+    # robot = Robot()
+    # missing = []
+    #         for name, device in (("bumper", robot.bumper), ("distance", robot.distance),
+    #                              ("optical", robot.optical), ("X", robot.x_motor),
+    #                              ("Z", robot.z_motor), ("grip", robot.grip_motor)):
+    #             if not device.installed():
+    #                 missing.append(name)
+    # if missing: print("missing: " + ", ".join(missing))
 
     #test moving the robot
-    robot.x.move(-100, 50)
-    robot.z.move(100, 50)
-    robot.grip(GRIP_OPEN_DEG, 50)
-    robot.grip(GRIP_CLOSED_DEG, 50)
-    robot.x.move(-200, 50)
-    robot.z.move(0, 50)
-    robot.stop()
+    # robot.x.move(-100, 50)
+    # robot.z.move(100, 50)
+    # robot.grip(GRIP_OPEN_DEG, 50)
+    # robot.grip(GRIP_CLOSED_DEG, 50)
+    # robot.x.move(-200, 50)
+    # robot.z.move(0, 50)
+    # robot.stop()
 
-    """
+
     main()  #comment out for testing single functions / movements

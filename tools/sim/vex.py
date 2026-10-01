@@ -19,7 +19,7 @@ SIM = {
     "grip_open": -500.0,   # GRIP_OPEN_DEG (closed is 0)
     "grab_reading": 10.0,  # true distance reading in the grab pose
     "hold_reading": 8.0,   # reading while a cube is held
-    "beam_half": 0.0,      # ideal narrow beam; test wider beams separately
+    "sensor_spread": 0.30, # distance sensor light spreads: a cube looks wider by 0.30 x its distance (01.10)
     "noise": 1.0,          # distance noise sigma, mm
     "wall_z": 350.0,       # mining area back wall, grab-Z frame
     "cube": 75.0,
@@ -219,11 +219,18 @@ class Distance:
             return SIM["hold_reading"] + random.gauss(0, SIM["noise"] * 0.3)
         x = _mm(SIM["port_x"]) + SIM["dist_dx"]
         z = _mm(SIM["port_z"])
-        near = SIM["wall_z"]
+        near = SIM["wall_z"] - z + SIM["grab_reading"]
         for c in SIM["cubes"]:
-            if abs(c["x"] - x) <= SIM["cube"] / 2 + SIM["beam_half"] and c["z"] >= z - 5:
-                near = min(near, c["z"])
-        return max(0.0, near - z + SIM["grab_reading"] + random.gauss(0, SIM["noise"]))
+            if c["z"] < z - 5:
+                continue
+            face = c["z"] - z + SIM["grab_reading"]
+            off = abs(c["x"] - x) - SIM["cube"] / 2           # mm outside the cube face
+            ramp = SIM["sensor_spread"] * face / 2            # the sensor still sees the cube here, farther
+            if off <= 0:
+                near = min(near, face)
+            elif off <= ramp:
+                near = min(near, face + 40.0 * off / ramp)    # sloped edge, like the real logs
+        return max(0.0, near + random.gauss(0, SIM["noise"]))
 
 
 class Optical:
