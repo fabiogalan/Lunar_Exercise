@@ -12,9 +12,11 @@ SIM = {
     "k_z": 0.10,
     "x_min": -1250.0,      # physical positions, independent of encoder zero
     "x_max": 0.0,
-    "x_start": -200.0,
+    "x_start": -140.0,     # X_CAL_DISTANCE from the bumper at x_max
     "z_max": 420.0,
-    "dist_dx": 0.0,        # beam X minus gripper X; -SENSOR_X_OFFSET
+    "dist_dx": 0.0,        # field X of the beam minus robot X; -SENSOR_X_OFFSET
+    "claw_dx": 0.0,        # field X of the claw centre minus robot X; -CLAW_X_OFFSET
+    "grip_open": -500.0,   # GRIP_OPEN_DEG (closed is 0)
     "grab_reading": 10.0,  # true distance reading in the grab pose
     "hold_reading": 8.0,   # reading while a cube is held
     "beam_half": 0.0,      # ideal narrow beam; test wider beams separately
@@ -65,11 +67,12 @@ def _grip_logic():
     g = _motors.get(SIM["port_grip"])
     if g is None:
         return
-    x, z = _mm(SIM["port_x"]), _mm(SIM["port_z"])
+    x, z = _mm(SIM["port_x"]) + SIM["claw_dx"], _mm(SIM["port_z"])
     held = _held()
     if held is not None:
         held["x"], held["z"] = x, z
-    if _grip_state[0] == "open" and g._pos > -60:
+    opened = g._pos / SIM["grip_open"]       # 0 closed, 1 open
+    if _grip_state[0] == "open" and opened < 0.15:
         _grip_state[0] = "closed"
         for c in SIM["cubes"]:
             centred = abs(c["x"] - x) <= (SIM["grip_inner"] - SIM["cube"]) / 2
@@ -80,7 +83,7 @@ def _grip_logic():
             if not c.get("held") and centred and not blocked and abs(c["z"] - z) < 15:
                 c["held"] = True
                 break
-    elif _grip_state[0] == "closed" and g._pos < -300:
+    elif _grip_state[0] == "closed" and opened > 0.6:
         _grip_state[0] = "open"
         if held is not None:
             held["held"] = False
@@ -138,7 +141,7 @@ class Motor:
             return (SIM["x_min"] / SIM["k_x"], SIM["x_max"] / SIM["k_x"])
         if self.port == SIM["port_z"]:
             return (-5.0 / SIM["k_z"], SIM["z_max"] / SIM["k_z"])
-        return (-600.0, 20.0)
+        return (min(0.0, SIM["grip_open"]) - 20.0, max(0.0, SIM["grip_open"]) + 20.0)
 
     def _step(self, ms):
         dps = self._speed / 100.0 * self.MAX_DPS
@@ -246,6 +249,10 @@ class Optical:
 
     def brightness(self, readraw=False):
         return 40.0 if _held() is not None else 2.0
+
+    def color(self):
+        c = _held()
+        return getattr(Color, c["colour"].upper()) if c is not None else Color.BLACK
 
 
 class Bumper:

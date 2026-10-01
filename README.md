@@ -7,12 +7,15 @@ sorting lane.
 
 ## Files
 
-- `src/main.py` is the complete program flashed to the Brain.
-- `docs/manual-setup.md` explains every value that must be entered by hand.
-- `docs/measurements.md` records the known robot geometry and measurements.
-- `tools/sim/run.py` runs the mission against a simple desktop simulation.
-- `tools/sim/test_detector.py` checks the cube-profile detector.
-- `tools/sim/vex.py` supplies the desktop-only VEX API and field model.
+```
+src/main.py        the robot program; the only file flashed to the Brain
+docs/              manual-setup.md (values entered by hand), measurements.md (geometry)
+tools/sim/         desktop only: run.py (mission simulation), test_detector.py,
+                   vex.py (fake VEX API and field model)
+reference/         course material: task description, presentations, data package
+```
+
+Keep `src/` for the Brain program only; everything else lives outside it.
 
 There is no separate `robot.py`, generated source, automatic calibration, field
 map, or route planner.
@@ -24,7 +27,7 @@ map, or route planner.
 2. Set `MANUAL_VALUES_SET = True` only after checking those values.
 3. Physically retract Z fully and close the gripper. The program defines both
    motor positions as zero when it starts.
-4. X can start anywhere within its safe travel. The bumper on port 2 defines
+4. X can start anywhere within its safe travel. The bumper on port 6 defines
    X=0 during every run.
 5. Press the Brain Check button or the optional Touch LED to begin.
 
@@ -33,9 +36,9 @@ the mission.
 
 ## Mission sequence
 
-1. X moves right until the bumper on port 2 is pressed. The program sets that
+1. X moves right until the bumper on port 6 is pressed. The program sets that
    position to X=0 and moves left to `HOME_CLEAR_X` so the bumper releases.
-2. X moves to `SEARCH_START_X` and scans left toward `SEARCH_END_X` while the
+2. X moves until the beam is at the disposal end of `MINING_AREA` and scans toward its far end while the
    distance sensor measures the field.
 3. The detector accepts a profile only after it sees the cube's two outer edges,
    a width between `CUBE_WIDTH_MIN` and `CUBE_WIDTH_MAX`, and enough open space
@@ -50,7 +53,7 @@ the mission.
 6. It closes the gripper, retracts Z, and confirms that the cube is present with
    `HOLD_DISTANCE`. The same check runs while X carries the cube.
 7. The optical sensor reads the colour. The robot moves to that colour's
-   `DROP_X`, extends to the common `DROP_Z`, opens the gripper, retracts Z, and
+   `DROP_X` (field X of the claw centre), extends to the common `DROP_Z`, opens the gripper, retracts Z, and
    closes the gripper again. Repeated cubes use the same coordinates and are
    expected to push earlier cubes farther into the lane.
 8. The cycle repeats until no accessible target is found, three pickup positions

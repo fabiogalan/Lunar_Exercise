@@ -11,7 +11,8 @@ currently used by `src/main.py`. Enter confirmed values at the top of that file.
 | Inner width between side grabbers | 89 mm | Physical centring tolerance; simulator only |
 | Outer gripper width | 100 mm | Basis for `SIDE_CLEARANCE`; simulator only |
 | Inner base to grabber tip | 80 mm | `GRIP_DEPTH` |
-| Distance-sensor lateral offset magnitude | 23 mm | Measure direction and enter signed `SENSOR_X_OFFSET` |
+| Bumper to claw centre (bumper pressed) | 73 mm | `CLAW_X_OFFSET` |
+| Bumper to distance-sensor beam (bumper pressed) | 93 mm | `SENSOR_X_OFFSET` |
 | Distance-sensor height above floor | 45 mm | Confirms that the beam intersects a cube face |
 | Optical sensor height above held cube | about 17 mm | Check reliable colour detection |
 
@@ -28,13 +29,11 @@ does not control pickup depth.
 | Safe left travel limit | `X_MIN` |
 | Safe maximum extension | `Z_MAX` |
 | Bumper-release position | `HOME_CLEAR_X` |
-| Mining-area scan limits | `SEARCH_START_X`, `SEARCH_END_X` |
+| Area lengths on the competition field | `X_STORAGE_COMP`, `X_DISPOSAL_COMP`, `X_MINING_COMP` |
 | Empty mining-area background depth | `WALL_Z` |
 | Distance reading at grabbing pose | `GRAB_DISTANCE` |
 | Maximum reading for a securely held cube | `HOLD_DISTANCE` |
-| Signed beam-to-gripper X correction | `SENSOR_X_OFFSET` |
 | Open and closed gripper angles | `GRIP_OPEN_DEG`, `GRIP_CLOSED_DEG` |
-| Green, red, and blue lane centres | `DROP_X` |
 | Common release/push depth | `DROP_Z` |
 | Held-cube hue ranges | `HUES` |
 
@@ -56,5 +55,5 @@ verify rotated and partly overlapping arrangements physically.
 
 The distance sensor points into the field. During a scan, the program subtracts
 `GRAB_DISTANCE` from its reading to express the observed face as a gripper Z
-coordinate. It corrects measured X with `SENSOR_X_OFFSET` and, if configured,
+coordinate. It converts robot X to the beam's field X with `SENSOR_X_OFFSET` and, if configured,
 `SENSOR_DELAY_S`. See `manual-setup.md` for measurement and validation steps.

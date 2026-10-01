@@ -17,7 +17,8 @@ def load_program():
     vex.SIM.update(port_x=scope["PORT_X"], port_z=scope["PORT_Z"],
                    port_grip=scope["PORT_GRIP"], k_x=scope["X_MM_PER_DEG"],
                    k_z=scope["Z_MM_PER_DEG"], dist_dx=-scope["SENSOR_X_OFFSET"],
-                   x_min=scope["X_MIN"], z_max=scope["Z_MAX"],
+                   claw_dx=-scope["CLAW_X_OFFSET"], grip_open=scope["GRIP_OPEN_DEG"],
+                   x_min=scope["X_WALL"], z_max=scope["Z_MAX"],
                    wall_z=scope["WALL_Z"], grab_reading=scope["GRAB_DISTANCE"],
                    hold_reading=max(1.0, scope["HOLD_DISTANCE"] - 1.0),
                    grip_depth=scope["GRIP_DEPTH"])
@@ -27,9 +28,9 @@ def load_program():
 def main():
     random.seed(1)
     vex.SIM["cubes"] = [
-        {"x": -500.0, "z": 80.0, "colour": "green"},
-        {"x": -700.0, "z": 80.0, "colour": "blue"},
-        {"x": -900.0, "z": 80.0, "colour": "red"},
+        {"x": -680.0, "z": 80.0, "colour": "green"},     # field X, in the mining area
+        {"x": -820.0, "z": 80.0, "colour": "blue"},
+        {"x": -960.0, "z": 80.0, "colour": "red"},
     ]
     program = load_program()
     robot = program["Robot"]()

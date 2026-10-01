@@ -15,7 +15,7 @@ Before turning on or running the program:
 The program sets the current Z and gripper motor positions to zero when `Robot`
 is created. Therefore the configured closed position should normally be
 `GRIP_CLOSED_DEG = 0`. It then establishes X=0 by driving right until the bumper
-on port 2 is pressed. The Touch LED is only an optional start button; it is not
+on port 6 is pressed. The Touch LED is only an optional start button; it is not
 used for homing.
 
 ## Wiring
@@ -23,9 +23,9 @@ used for homing.
 | Constant | Port | Device |
 | --- | ---: | --- |
 | `PORT_Z` | 1 | Z extension motor |
-| `PORT_BUMPER` | 2 | Bumper that defines X=0 |
-| `PORT_TOUCH` | 4 | Optional Touch LED/start button |
-| `PORT_X` | 6 | X trolley motor |
+| `PORT_BUMPER` | 6 | Bumper that defines X=0 |
+| `PORT_TOUCH` | 3 | Optional Touch LED/start button |
+| `PORT_X` | 5 | X trolley motor |
 | `PORT_OPTICAL` | 7 | Optical colour sensor |
 | `PORT_DISTANCE` | 8 | Forward-facing distance sensor |
 | `PORT_GRIP` | 9 | Gripper motor |
@@ -34,17 +34,31 @@ Change these constants if the physical wiring differs.
 
 ## Axis and field values
 
+All X values are millimetres from the bumper (X=0), negative to the left.
+*Robot X* is the trolley position (0 while the bumper is pressed). *Field X* is
+a place on the field. The claw centre is at robot X - `CLAW_X_OFFSET` and the
+distance beam at robot X - `SENSOR_X_OFFSET`. Areas, drop positions and detected
+cubes are field X; the program adds `CLAW_X_OFFSET` when it moves the claw there.
+
+The areas are built from their lengths along X (`X_STORAGE`, `X_DISPOSAL`,
+`X_MINING`; `_TEST` or `_COMP` values chosen by `COMPETITION`), in this order
+from the bumper: storage | disposal | mining. `tools/sim/test_config.py` checks
+the order and that every target is within the X travel.
+
 | Constant | Meaning and measurement |
 | --- | --- |
 | `X_MM_PER_DEG` | X travel in millimetres divided by motor rotation in degrees. Positive motor motion must move X right. |
 | `Z_MM_PER_DEG` | Z travel in millimetres divided by motor rotation in degrees. Positive motor motion must extend into the field. |
-| `X_MIN` | Safe leftmost X coordinate relative to the bumper at X=0. |
+| `CLAW_X_OFFSET` | Bumper to claw centre (the gripper's axis of symmetry), measured with the bumper pressed: 73 mm. |
+| `SENSOR_X_OFFSET` | Bumper to the distance-sensor beam, measured the same way: 93 mm. |
+| `X_MIN` | Safe leftmost robot X (left wall at -989). |
 | `Z_MAX` | Safe maximum Z extension from the fully retracted Z=0 position. |
 | `HOME_CLEAR_X` | Small negative X coordinate that reliably releases the bumper after homing. |
-| `SEARCH_START_X` | Right edge of the mining-area scan. |
-| `SEARCH_END_X` | Left edge of the mining-area scan. It must be more negative than `SEARCH_START_X` and no farther left than `X_MIN`. |
+| `COMPETITION` | False on the test field, True on competition day (selects the `_COMP` area lengths). |
+| `STORAGE_AREA`, `DISPOSAL_AREA`, `MINING_AREA` | Derived field X ranges (left edge, right edge); do not edit, edit the lengths. |
+| `DROP_X` | Derived field X of the claw centre for each colour: red and green at 1/4 and 3/4 of the storage area (green nearer the mining area, rule 7.2), blue in the middle of the disposal area. |
+| `SEARCH_START_X`, `SEARCH_END_X` | Derived robot X of the scan: the beam starts at the mining edge and runs as far left as `X_MIN` allows. |
 | `WALL_Z` | Estimated Z coordinate of the background seen through an empty part of the mining area, in the same gripper-position frame as a detected cube. It separates cube faces from empty background. |
-| `DROP_X` | One X coordinate for each colour lane. Every cube of that colour uses the same coordinate. |
 | `DROP_Z` | Common extension where the gripper opens. A new cube is expected to push cubes already in its lane forward. |
 
 To measure either motor scale, command a small known motor rotation, measure the
@@ -57,7 +71,6 @@ allowing automatic movement.
 | --- | --- |
 | `GRAB_DISTANCE` | Distance-sensor reading when the open gripper is at the correct depth to close around a cube. It also converts a scan reading into the estimated Z grab coordinate. |
 | `HOLD_DISTANCE` | Largest reading that reliably indicates a held cube after Z retracts. It is also used to detect a lost cube while moving X. |
-| `SENSOR_X_OFFSET` | Gripper-centre X minus the X coordinate measured by the distance beam. Positive means the gripper centre is to the right of the beam. |
 | `SENSOR_DELAY_S` | Delay between the physical measurement and returned reading, in seconds. Keep zero for initial slow tests unless repeated scans show a speed-dependent X shift. |
 | `GRIP_OPEN_DEG` | Gripper motor position when fully open. |
 | `GRIP_CLOSED_DEG` | Gripper position at program startup; normally zero. |

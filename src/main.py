@@ -1,7 +1,7 @@
 """Lunar cube sorter — the complete program flashed to the VEX IQ2 Brain.
 
 Before starting: retract Z fully and close the gripper. Check all MANUAL VALUES.
-X=0 is established by driving right until the bumper on port 2 is pressed.
+X=0 is established by driving right until the bumper on port 6 is pressed.
 """
 from vex import *
 
@@ -12,38 +12,91 @@ MANUAL_VALUES_SET = True
 
 # Ports currently used on the robot.
 PORT_Z = Ports.PORT1
-PORT_BUMPER = Ports.PORT2
-PORT_TOUCH = Ports.PORT4       # optional start button
-PORT_X = Ports.PORT6
+PORT_BUMPER = Ports.PORT6
+PORT_TOUCH = Ports.PORT3       # optional start button
+PORT_X = Ports.PORT5
 PORT_OPTICAL = Ports.PORT7
 PORT_DISTANCE = Ports.PORT8
 PORT_GRIP = Ports.PORT9
 
 # Measure these values by hand and replace the placeholders.
-X_MM_PER_DEG = 0.10
+
+#test mode is _TEST ground, actual competitoon has bigger playgrounf so its _COMP, final code must use only _COMP parameters 
+
+#0 is defined at the bump sensor, for position of Z distance sensor one must deduct sensor offset! 
+X_MM_PER_DEG = 0.3245  
 Z_MM_PER_DEG = 0.10
-X_MIN = -1200.0
+
+# COORDINATES. Everything is measured in mm from the bumper (X=0), negative = left.
+# Robot X (encoder) is the trolley: X=0 while the bumper is pressed.
+# Field X is where something is on the field. A tool at robot X sits at
+#   claw centre   = X - CLAW_X_OFFSET     -> to put the claw on field x: move to x + CLAW_X_OFFSET
+#   distance beam = X - SENSOR_X_OFFSET   -> a reading taken at X is at field X - SENSOR_X_OFFSET
+CLAW_X_OFFSET = 73.0        # bumper -> claw centre (axis of symmetry, where the cube centre goes)
+MACHINE_LENGTH = 228.0      # at max left, the bumper (right end of the machine) is 228 mm from the left wall
+
+
+X_MINING_TEST = 610.0  #length of mining area in mm
+X_MINING_COMP = 1830 
+
+X_DISPOSAL_TEST = 305.0   #length of disposal area in mm, ignoring the wall for a while 
+X_DISPOSAL_COMP = 305.0  
+
+X_STORAGE_TEST = 305.0  
+X_STORAGE_COMP = 610.0  
+
+# Field areas (field X). From the bumper: storage | disposal | mining.
+COMPETITION = False         # True on competition day: uses the _COMP lengths
+X_STORAGE = X_STORAGE_COMP if COMPETITION else X_STORAGE_TEST
+X_DISPOSAL = X_DISPOSAL_COMP if COMPETITION else X_DISPOSAL_TEST
+X_MINING = X_MINING_COMP if COMPETITION else X_MINING_TEST
+STORAGE_AREA = (-X_STORAGE, 0.0)                                 # (left edge, right edge)
+DISPOSAL_AREA = (STORAGE_AREA[0] - X_DISPOSAL, STORAGE_AREA[0])
+MINING_AREA = (DISPOSAL_AREA[0] - X_MINING, DISPOSAL_AREA[0])
+
+
 Z_MAX = 400.0
 HOME_CLEAR_X = -10.0
-SEARCH_START_X = -350.0
-SEARCH_END_X = -1150.0
+#TODO make competition variables 
+SEARCH_START_X_TEST = 0 - X_DISPOSAL_TEST - X_STORAGE_TEST # -610mm
+SEARCH_END_X_TEST = - ( X_MINING_TEST + X_DISPOSAL_TEST + X_STORAGE_TEST) #-1820mm 
+SEARCH_START_X_COMP = 0 - X_DISPOSAL_COMP - X_STORAGE_COMP
+SEARCH_END_X_COMP = - ( X_MINING_COMP + X_DISPOSAL_COMP + X_STORAGE_COMP)
+
 WALL_Z = 350.0              # Z depth of the wall at the end of the production area
+
 GRAB_DISTANCE = 5.0        # distance from the gripper to the cube when it is grabbed
 HOLD_DISTANCE = 5.0        # distance from the gripper to the cube when it is held securely
-SENSOR_X_OFFSET = 0.0
+SENSOR_X_OFFSET = 93.0
+SENSOR_CLAW_OFFSET = 17.0   # claw centre -> distance beam (beam is left of the claw centre)
+SENSOR_X_OFFSET = CLAW_X_OFFSET + SENSOR_CLAW_OFFSET   # bumper -> beam: 73 + 17 = 90, replaces the 93 above
 SENSOR_DELAY_S = 0.0
-GRIP_OPEN_DEG = -500
+GRIP_OPEN_DEG = 80
 GRIP_CLOSED_DEG = 0
+
+# The SEARCH values above are field X for the beam; the robot X that puts the beam there:
+SEARCH_START_X = (SEARCH_START_X_COMP if COMPETITION else SEARCH_START_X_TEST) + SENSOR_X_OFFSET
+# The left wall stops the machine, so X ends MACHINE_LENGTH before the end of the field:
+X_WALL = (SEARCH_END_X_COMP if COMPETITION else SEARCH_END_X_TEST) + MACHINE_LENGTH   # -1220 + 228 = -992
+X_MIN = X_WALL + 10.0       # robot X; 10 mm before the wall so the motor does not stall against it
+SEARCH_END_X = X_MIN
 
 # One X lane per colour. Every cube is pushed to the same Z depth; it pushes
 # cubes already in that lane farther into the production area.
-DROP_X = {"green": -250.0, "red": -140.0, "blue": -50.0}
+# Red and green at 1/4 and 3/4 of the storage area (green nearer the mining area,
+# rule 7.2), blue in the middle of the disposal area.
+DROP_X = {"red": STORAGE_AREA[0] * 0.25, "green": STORAGE_AREA[0] * 0.75,
+          "blue": (DISPOSAL_AREA[0] + DISPOSAL_AREA[1]) / 2} #ACHTUNG: coordintates of the claw, sensor has offset from the center of the claw
 DROP_Z = 100.0
+BOUNDARY_PAUSE_S = 5        # test: stop with the sensor on each area boundary for 5 s (0 = off)
 HUES = {"red": (330.0, 25.0), "green": (70.0, 170.0), "blue": (180.0, 270.0)}
 
+CUBE_SIZE = 75.0
+
 # Detection values. A 75 mm cube rotated 10 degrees appears about 87 mm wide.
-CUBE_WIDTH_MIN = 72.0
+CUBE_WIDTH_MIN = 75.0
 CUBE_WIDTH_MAX = 90.0
+
 SIDE_CLEARANCE = 17.0         # 15 mm gap + 2 mm measurement margin
 DEPTH_JUMP = 20.0             # abrupt jump; slopes/corners remain one cube
 GRIP_DEPTH = 80.0       # Z depth of the gripper when closed on a cube
@@ -95,7 +148,7 @@ class Axis:
         self.maximum = maximum
         self.target = 0.0
         self.started = 0
-        self.timeout = 0
+        self.timeout = 0    
         motor.set_stopping(HOLD)
         motor.set_position(0, DEGREES)
 
@@ -145,6 +198,7 @@ class Robot:
         self.grip_motor.set_stopping(HOLD)
         self.grip_motor.set_position(0, DEGREES)
         self.homed = False
+        self.last = -1
 
     def stop(self):
         self.x_motor.stop()
@@ -154,6 +208,14 @@ class Robot:
     def read_distance(self):
         value = self.distance.object_distance(MM)
         return value if 0 < value <= 1000 else None
+
+    def report(self, distance):
+        # area,arm X,sensor X,Z,distance (field X), printed whenever the reading changes
+        if distance != self.last:
+            self.last = distance
+            x = self.x.mm()
+            print("%s,%.1f,%.1f,%.0f,%s" % (area(x - SENSOR_X_OFFSET), x - CLAW_X_OFFSET, x - SENSOR_X_OFFSET,
+                                          self.z.mm(), "-" if distance is None else "%.0f" % distance))
 
     def home(self):
         """Drive right to the bumper, define X=0, then back away."""
@@ -171,8 +233,6 @@ class Robot:
         finally:
             self.x_motor.stop()
         wait(60, MSEC)
-        if not self.bumper.pressing():
-            raise RobotError("unstable bumper signal")
         self.x_motor.set_position(0, DEGREES)
         self.x.move(HOME_CLEAR_X, HOME_SPEED)
         if self.bumper.pressing():
@@ -180,6 +240,19 @@ class Robot:
         self.homed = True
 
     def move_x(self, target, speed, carrying=False):
+        # With BOUNDARY_PAUSE_S, first stop with the sensor on every boundary on the way.
+        start = self.x.mm()
+        for edge in sorted((STORAGE_AREA[0], DISPOSAL_AREA[0]), reverse=target < start):
+            x = edge + SENSOR_X_OFFSET
+            if BOUNDARY_PAUSE_S and abs(x - start) > 2 and (start - x) * (x - target) > -4:
+                self.go_x(x, speed, carrying)
+                print("BOUNDARY,field %.0f" % edge)
+                self.last = -1
+                self.report(self.read_distance())
+                wait(BOUNDARY_PAUSE_S, SECONDS)
+        self.go_x(target, speed, carrying)
+
+    def go_x(self, target, speed, carrying):
         if not self.homed or self.z.mm() > 2:
             raise RobotError("home X and retract Z first")
         self.x.start(target, speed)
@@ -188,6 +261,7 @@ class Robot:
             while not self.x.arrived():
                 self.x.check()
                 distance = self.read_distance()
+                self.report(distance)
                 if carrying:
                     lost = lost + 1 if distance is None or distance > HOLD_DISTANCE else 0
                     if lost >= 3:
@@ -214,7 +288,7 @@ class CubeDetector:
             spacing = self.samples[-1][0] - x
             if spacing < 1.0:
                 return None
-            if spacing > 2.0:
+            if spacing > 10.0:                  # a gap in the data, not just a slow loop (robot: ~2 mm per loop)
                 self.samples = []
         self.samples.append((x, z))
         while self.samples[0][0] - x > 132:
@@ -236,7 +310,7 @@ class CubeDetector:
         i = 0
         while i < len(s):
             z = s[i][1]
-            if z is None or z >= WALL_Z - 37.5:
+            if z is None or z >= WALL_Z - CUBE_SIZE / 2:#TODO make a glb variable 
                 i += 1
                 continue
             first = i
@@ -258,7 +332,7 @@ class CubeDetector:
             if width < CUBE_WIDTH_MIN or width > CUBE_WIDTH_MAX:
                 continue
             centre = (left + right) / 2
-            beam_x = centre + SENSOR_X_OFFSET
+            beam_x = centre - SENSOR_CLAW_OFFSET    # beam while the claw is on the cube
             sample = min(range(first, i), key=lambda j: abs(s[j][0] - beam_x))
             grab_z = s[sample][1]
             clear_depth = max(grab_z + GRIP_DEPTH, deepest) + 5
@@ -266,6 +340,14 @@ class CubeDetector:
                     self.side_is_clear(i, 1, left, clear_depth):
                 return centre, grab_z
         return None
+
+
+def area(x):
+    # field X -> area code
+    for name, (left, right) in (("MINE", MINING_AREA), ("DISPOSE", DISPOSAL_AREA), ("STORE", STORAGE_AREA)):
+        if left <= x <= right:
+            return name
+    return "OUT"
 
 
 def find_cube(robot, failed):
@@ -282,9 +364,10 @@ def find_cube(robot, failed):
                 velocity = 0.7 * velocity + 0.3 * (x - old_x) * 1000.0 / (time - old_time)
             old_x, old_time = x, time
             distance = robot.read_distance()
+            robot.report(distance)
             z = None if distance is None else distance - GRAB_DISTANCE
-            target = detector.add(x - velocity * SENSOR_DELAY_S + SENSOR_X_OFFSET, z)
-            if target and not any(abs(target[0] - position) < 37.5 for position in failed):
+            target = detector.add(x - velocity * SENSOR_DELAY_S - SENSOR_X_OFFSET, z)   # field X
+            if target and not any(abs(target[0] - position) < CUBE_SIZE / 2 for position in failed):
                 return target
             wait(LOOP_MS, MSEC)
     finally:
@@ -304,8 +387,8 @@ def held_distance(robot):
 
 
 def pick(robot, target):
-    x, z = target
-    robot.move_x(x, SCAN_SPEED)
+    x, z = target                       # field X of the cube centre
+    robot.move_x(x + CLAW_X_OFFSET, SCAN_SPEED)
     robot.grip(GRIP_OPEN_DEG, 20)
     robot.z.move(max(0, z - 30), Z_SPEED)
     robot.z.start(min(z + 20, Z_MAX), Z_CREEP_SPEED)
@@ -346,7 +429,7 @@ def colour(robot):
 
 
 def place(robot, name):
-    robot.move_x(DROP_X[name], CARRY_SPEED, True)
+    robot.move_x(DROP_X[name] + CLAW_X_OFFSET, CARRY_SPEED, True)
     robot.z.move(DROP_Z, CARRY_SPEED)
     robot.grip(GRIP_OPEN_DEG, 20)
     robot.z.move(0, Z_SPEED)
@@ -354,11 +437,15 @@ def place(robot, name):
 
 
 def run(robot):
-    used = {"green": 0, "red": 0, "blue": 0}
+    used = {"green": 0, "red": 0, "blue": 0} #maximum 4 cubes in the row, then push with x offset 
     failed = []
     end_time = now() + 600000
     robot.home()
+    print("area,arm X,sensor X,Z,distance")
+    print("AREAS (field X) store", STORAGE_AREA, "dispose", DISPOSAL_AREA, "mine", MINING_AREA, "drop", DROP_X)
     while now() < end_time - 90000:
+
+        #check limits ? 
         show("SEARCHING")
         target = find_cube(robot, failed)
         if target is None:
@@ -396,6 +483,7 @@ def main():
             raise RobotError("enter manual values, then set MANUAL_VALUES_SET=True")
         robot.optical.set_light(100)
         wait_for_start(robot.touch)
+        #main loop 
         run(robot)
     except Exception as error:
         if robot:
