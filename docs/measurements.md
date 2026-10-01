@@ -1,57 +1,60 @@
 # Robot and field measurements
 
-The editable configuration is at the top of `src/robot.py`. These measurements
-came from 30 September; field coordinates and calibration results still need to
-be filled in. Regenerate `src/main.py` after updating the source.
+This page records known geometry and maps each measurement to the constants
+currently used by `src/main.py`. Enter confirmed values at the top of that file.
 
-## Wiring
+## Known geometry
 
-| Port | Device | Role |
-| --- | --- | --- |
-| 1 | Z motor | Arm extension |
-| 2 | Bumper | Right-hand X home switch (`PORT_HOME`) |
-| 3 | Touch LED, optional | Start/menu button; not a home sensor |
-| 5 | X motor | Trolley, positive degrees move right |
-| 7 | Optical sensor | Colour of the held cube |
-| 8 | Distance sensor | Cube face/gaps, approach distance, held-cube confirmation |
-| 9 | Gripper motor | Lift/lower the grabbing arm |
+| Physical measurement | Current value | Used by the program |
+| --- | ---: | --- |
+| Cube edge and height | 75 mm | Basis for `CUBE_WIDTH_MIN` and `CUBE_WIDTH_MAX` |
+| Inner width between side grabbers | 89 mm | Physical centring tolerance; simulator only |
+| Outer gripper width | 100 mm | Basis for `SIDE_CLEARANCE`; simulator only |
+| Inner base to grabber tip | 80 mm | `GRIP_DEPTH` |
+| Distance-sensor lateral offset magnitude | 23 mm | Measure direction and enter signed `SENSOR_X_OFFSET` |
+| Distance-sensor height above floor | 45 mm | Confirms that the beam intersects a cube face |
+| Optical sensor height above held cube | about 17 mm | Check reliable colour detection |
 
-## Measured geometry
+`GRIP_DEPTH` describes how far the gripper body enters alongside a cube. It is
+used only to check whether both side corridors remain clear deeply enough. It
+does not control pickup depth.
 
-| Measurement | mm | Use |
-| --- | --- | --- |
-| Cube edge and height | 75 | `CUBE_MM` |
-| Inner width between side grabbers | 89 | Limits centring error and cube rotation |
-| Outer width of gripper | 100 | Requires free space around the cube |
-| Inner base to grabber tip | 80 | `GRIP_DEPTH_MM` |
-| Distance sensor lateral offset magnitude | 23 | Calibrate the sign/value of `DIST_DX_MM` |
-| Distance sensor height above floor | 45 | Beam should intersect the cube face |
-| Optical sensor above held cube | about 17 | Read colour after pulling the cube into the claw |
-| Sensor face to cube face at grab pose | TODO | `GRAB_DIST_MM` |
-| Safe left travel / search bounds | TODO | Negative X coordinates from the right switch |
-| Wall depth / sorting poses | TODO | Measure in the new home-relative frame |
+## Values still requiring physical measurement
 
-The colour sensor looks **down** onto the held cube. The distance sensor points
-into the field. `DIST_DX_MM` is the correction added to the observed trolley X to
-obtain the aligned gripper X; teach it with `cal-cube` rather than assigning a
-sign to the 23 mm measurement by eye.
-
-## Clearances
-
-| Geometry check | Result |
+| Measurement | Constant or setting |
 | --- | --- |
-| Straight 75 mm cube in an 89 mm opening | 7 mm centring margin per side |
-| Cube at 10 degrees: projected width about 86.9 mm | Only about 1 mm centring margin per side |
-| 100 mm outer gripper, straight cube with 15 mm gaps | 105 mm corridor; 2.5 mm margin per side |
-| Same with 20 mm gaps | 115 mm corridor; 7.5 mm margin per side |
-| Nominal 95 mm row pitch versus 80 mm jaw depth | About 15 mm depth margin for straight cubes |
+| X millimetres per motor degree | `X_MM_PER_DEG` |
+| Z millimetres per motor degree | `Z_MM_PER_DEG` |
+| Safe left travel limit | `X_MIN` |
+| Safe maximum extension | `Z_MAX` |
+| Bumper-release position | `HOME_CLEAR_X` |
+| Mining-area scan limits | `SEARCH_START_X`, `SEARCH_END_X` |
+| Empty mining-area background depth | `WALL_Z` |
+| Distance reading at grabbing pose | `GRAB_DISTANCE` |
+| Maximum reading for a securely held cube | `HOLD_DISTANCE` |
+| Signed beam-to-gripper X correction | `SENSOR_X_OFFSET` |
+| Open and closed gripper angles | `GRIP_OPEN_DEG`, `GRIP_CLOSED_DEG` |
+| Green, red, and blue lane centres | `DROP_X` |
+| Common release/push depth | `DROP_Z` |
+| Held-cube hue ranges | `HUES` |
 
-These are geometric checks, not evidence of achieved positioning accuracy.
-Rotated cubes remain particularly demanding. The software checks observed face
-width and side-gap depth but cannot establish the full 3D shape from one sensor
-height. Test alignment, rotated cubes and actual jaw clearance on the robot.
+## Geometry checks
 
-The search defaults to 15 mm visible side gaps plus 2 mm measurement margin.
-It may conservatively skip a physical 15–20 mm gap, especially with beam
-broadening. Unknown readings are not treated as empty space. See
-[calibration.md](calibration.md) for the required measurements and tuning.
+| Check | Result |
+| --- | --- |
+| Straight 75 mm cube inside an 89 mm opening | 7 mm nominal centring margin per side |
+| 75 mm cube at 10 degrees | About 86.9 mm projected width, leaving about 1 mm per side in an 89 mm opening |
+| 100 mm outer gripper with 15 mm visible gap on each side | 105 mm corridor, leaving about 2.5 mm per side |
+| 100 mm outer gripper with 20 mm visible gap on each side | 115 mm corridor, leaving about 7.5 mm per side |
+| Nominal 95 mm row pitch compared with 80 mm gripper depth | About 15 mm depth margin for straight cubes |
+
+The detector currently accepts apparent widths from 72 to 90 mm and requires
+17 mm of visible clearance on both sides. These settings cover the calculated
+width of a cube rotated about 10 degrees, but the mechanical margin is small.
+The single distance beam cannot prove full three-dimensional clearance, so
+verify rotated and partly overlapping arrangements physically.
+
+The distance sensor points into the field. During a scan, the program subtracts
+`GRAB_DISTANCE` from its reading to express the observed face as a gripper Z
+coordinate. It corrects measured X with `SENSOR_X_OFFSET` and, if configured,
+`SENSOR_DELAY_S`. See `manual-setup.md` for measurement and validation steps.

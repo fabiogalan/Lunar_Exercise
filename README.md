@@ -1,96 +1,79 @@
 # Lunar resource sorter
 
-The robot homes against the **right-hand bumper on port 2**, moves left to the
-mining area, finds the first accessible cube, picks it up, and returns it to the
-sorting area. It repeats from the start of the search area after each placement.
+This VEX IQ2 project contains one robot program: `src/main.py`. The robot homes
+the X axis against the bumper, scans the mining area for an accessible cube,
+picks it up, identifies its colour, and pushes it into the corresponding
+sorting lane.
+
+## Files
+
+- `src/main.py` is the complete program flashed to the Brain.
+- `docs/manual-setup.md` explains every value that must be entered by hand.
+- `docs/measurements.md` records the known robot geometry and measurements.
+- `tools/sim/run.py` runs the mission against a simple desktop simulation.
+- `tools/sim/test_detector.py` checks the cube-profile detector.
+- `tools/sim/vex.py` supplies the desktop-only VEX API and field model.
+
+There is no separate `robot.py`, generated source, automatic calibration, field
+map, or route planner.
+
+## Before starting
+
+1. Measure and enter the values at the top of `src/main.py` as described in
+   `docs/manual-setup.md`.
+2. Set `MANUAL_VALUES_SET = True` only after checking those values.
+3. Physically retract Z fully and close the gripper. The program defines both
+   motor positions as zero when it starts.
+4. X can start anywhere within its safe travel. The bumper on port 2 defines
+   X=0 during every run.
+5. Press the Brain Check button or the optional Touch LED to begin.
+
+With `MANUAL_VALUES_SET = False`, the Brain displays an error and does not start
+the mission.
 
 ## Mission sequence
 
-1. Start with Z fully retracted and the gripper closed. X may be anywhere on the
-   usable rail. Press the brain Check button or the optional Touch LED to start.
-2. Move slowly right until the bumper is pressed. Stop, confirm the contact,
-   set X=0, and back off to release it. An initially pressed switch is first
-   released and approached again. A missing/stuck switch or stalled motor stops
-   the run; an encoder reset alone never establishes home.
-3. Move left to `SEARCH_START_X`, then scan slowly towards `SEARCH_END_X`.
-4. Accept a target only after seeing a complete cube-width face and enough clear
-   space on **both** sides. The default is 15 mm per side plus a 2 mm measurement
-   margin. Readings in those gaps must extend beyond the jaws' approach path.
-   A front cube may partly hide another cube and still qualify: the deeper
-   return counts as clearance if the jaws can pass in front of it. The visible
-   fragment of the rear cube is not treated as a complete cube.
-5. Stop scanning and move back right to the measured cube centre, corrected for
-   the sensor's sideways offset and latency. Open the claw, extend Z, close at
-   the taught distance, retract, and confirm that the cube is held.
-6. Read the colour while holding the cube. Return right to the next unused slot
-   for that colour, extend, release, retract, and search again.
-7. Return near home when no accessible cube remains, the search time expires,
-   or three picks have failed. Unknown colour or a full sorting zone stops near
-   home **with the cube held**. Motion/sensor faults stop at the current position.
+1. X moves right until the bumper on port 2 is pressed. The program sets that
+   position to X=0 and moves left to `HOME_CLEAR_X` so the bumper releases.
+2. X moves to `SEARCH_START_X` and scans left toward `SEARCH_END_X` while the
+   distance sensor measures the field.
+3. The detector accepts a profile only after it sees the cube's two outer edges,
+   a width between `CUBE_WIDTH_MIN` and `CUBE_WIDTH_MAX`, and enough open space
+   on both sides for the gripper.
+4. Continuous depth changes are allowed, so a cube rotated by about 10 degrees
+   can be detected. A corner may change the slope without ending the profile.
+   A change larger than `DEPTH_JUMP` separates surfaces at different depths.
+   This allows a front cube to be selected when it partly hides another cube.
+5. The robot centres the gripper, opens it, extends Z quickly to 30 mm before
+   the estimated cube position, then approaches slowly until the distance
+   reading reaches `GRAB_DISTANCE`.
+6. It closes the gripper, retracts Z, and confirms that the cube is present with
+   `HOLD_DISTANCE`. The same check runs while X carries the cube.
+7. The optical sensor reads the colour. The robot moves to that colour's
+   `DROP_X`, extends to the common `DROP_Z`, opens the gripper, retracts Z, and
+   closes the gripper again. Repeated cubes use the same coordinates and are
+   expected to push earlier cubes farther into the lane.
+8. The cycle repeats until no accessible target is found, three pickup positions
+   fail, or the 90-second return reserve of the ten-minute mission is reached.
 
-Home is established once per run. Returning to the sorting area uses encoder
-positions; it does not push the bumper again on every delivery.
+If the colour is unknown, the robot carries the cube to `HOME_CLEAR_X`, stops,
+and leaves the cube held.
 
-## Coordinates and settings
+## Flashing
 
-- X=0 is the right-hand switch contact; positions to the left are negative.
-- Z=0 is retracted; positive Z extends into the field.
-- Cube/slot coordinates describe the **gripper pose**, not the sensor position.
-- `SEARCH_START_X = -350.0` is the configurable distance left before searching.
-  **350 mm is a placeholder**, not a field measurement.
-- `SEARCH_END_X`, `X_TRAVEL_MIN`, wall distance, all sorting slots, and calibration
-  values also require measurement. The first/last cube need space for observing
-  their entire face and both gaps within the scan, including the sensor offset.
+The VEX project is configured to flash `src/main.py` to slot 1. Use the normal
+VEX Build and Download command in VS Code.
 
-Edit configuration at the top of [src/robot.py](src/robot.py). The mission refuses
-to start while `CALIBRATED = False`. Calibration/test builds remain available.
-See [calibration](docs/calibration.md) and [measurements](docs/measurements.md).
+## Desktop checks
 
-## Code layout
-
-| File | Purpose |
-| --- | --- |
-| `src/robot.py` | Editable source: configuration, hardware/motion, local search, mission, bench calibration |
-| `src/main.py` | Generated program downloaded to the brain; currently a mission build |
-| `tools/build.py` | Keeps only the selected mode to reduce the brain's compile-memory demand |
-| `tools/go.py` | Build, download, start, and open the live view |
-| `tools/live_plot.py` | Robot/beam position, identified cube locations, distance history, status |
-| `tools/sim/` | Desktop simulation and behavioral checks |
-
-The mission uses a short moving scan window, at most about 133 samples with the
-current settings. It has no persistent field map, global cube planner, or dynamic
-state dispatch. Only a few failed X positions and sorting-slot counters persist.
-A failed position is skipped for the rest of the run, including cubes behind it.
-
-The detector splits abrupt changes between adjacent distance samples (default
-`DEPTH_JUMP_MM = 20`). Gradual changes across a rotated cube stay together,
-including its two visible faces. At 10 degrees, a 75 mm cube projects to about
-86.9 mm along X; the width check allows this increase. The target is centred
-between its outer edges, and its approach depth is taken at the sensor's
-position after centring the gripper. A rear cube must still clear that jaw path.
-
-## Build and run
-
-```sh
-python3 tools/build.py cal-home  # isolate homing for bench checks
-python3 tools/build.py mission  # generate the competition program
-```
-
-Then use VEX Build and Download. Alternatively `python3 tools/go.py mission`
-builds, downloads **and starts** it; the mission still waits for the start button.
-Restore the retracted/closed starting pose before launching any program.
+Run these from the project root:
 
 ```sh
 python3 -m unittest discover -s tools/sim -p 'test_*.py' -v
-python3 tools/sim/run.py --seed 3 > sim.log
-python3 tools/sim/run.py --built --seed 3
-python3 tools/live_plot.py --file sim.log
+python3 tools/sim/run.py
 ```
 
-The simulator bypasses the physical calibration/start-button gate without
-changing the downloaded program. It models an ideal narrow beam, encoder
-zeroing, switch faults, and basic jaw fit. Hardware testing is still required for
-sensor beam width/latency, rotated cubes, friction, and repeatable positioning.
-The 600 s budget includes homing; the default search reserves 90 s for completing
-a pick and returning. Tune that reserve from measured worst-case cycle times;
-it is a scheduling allowance, not a hard interruption of every actuator call.
+The simulator checks mission flow and detector logic. It does not model real
+motor loads, sensor timing, gripper tolerances, collisions, or the physical
+pushing of cubes already in a sorting lane. Validate the measured values slowly
+on the real robot before a full-speed run.

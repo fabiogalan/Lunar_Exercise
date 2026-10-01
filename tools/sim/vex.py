@@ -14,7 +14,7 @@ SIM = {
     "x_max": 0.0,
     "x_start": -200.0,
     "z_max": 420.0,
-    "dist_dx": 0.0,        # beam X minus gripper X; the same sign as DIST_DX_MM
+    "dist_dx": 0.0,        # beam X minus gripper X; -SENSOR_X_OFFSET
     "grab_reading": 10.0,  # true distance reading in the grab pose
     "hold_reading": 8.0,   # reading while a cube is held
     "beam_half": 0.0,      # ideal narrow beam; test wider beams separately
