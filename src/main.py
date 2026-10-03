@@ -43,7 +43,7 @@ X_MINING_TEST = 610.0
 X_MINING_COMP = 1830.0
 
 COMPETITION = False         # True on competition day: uses the _COMP lengths
-CALIBRATION_SCAN = False    # True: scan the whole mining area once, print FOUND lines, pick nothing
+CALIBRATION_SCAN = False   # True: scan the whole mining area once, print FOUND lines, pick nothing
 X_STORAGE = X_STORAGE_COMP if COMPETITION else X_STORAGE_TEST
 X_DISPOSAL = X_DISPOSAL_COMP if COMPETITION else X_DISPOSAL_TEST
 X_MINING = X_MINING_COMP if COMPETITION else X_MINING_TEST
@@ -71,6 +71,7 @@ SENSOR_X_OFFSET = CLAW_X_OFFSET + SENSOR_CLAW_OFFSET    # bumper -> beam = 83
 GRIP_OPEN_DEG = 90          # 90 grabbed well (01.10)
 GRIP_CLOSED_DEG = 0
 GRAB_SEAT = 5.0        #mm to push cube further in after touched to make it straighter
+PICK_TRIES = 2              # failed picks at one spot before it is skipped for the rest of the run
 PUSH_MM = 5.0               # Z moved in while the reading stopped shrinking = the claw is pushing the cube: grab
                             # (03.10: reading stuck at 20 while Z went on, the cube slid back 40 mm and was not grabbed)
 
@@ -99,7 +100,7 @@ LANE_STEP_Z = CUBE_SIZE                      # cubes in a line sit back-to-back
 Z_BACK = Z_MAX - CUBE_MARGIN     # deepest placement (each line is filled from the back)
 
 # The first pile is one CLAW_X_OFFSET inside the edge so the claw can reach it and push the cube to the edge.
-DROP_X = {"red": PRODUCTION_AREA[1] - EDGE_MARGIN - CLAW_X_OFFSET,
+DROP_X = {"red": PRODUCTION_AREA[1] - CLAW_X_OFFSET,  # get rid of margin here EDGE_MARGIN
           "green": PRODUCTION_AREA[0] + EDGE_MARGIN + CLAW_X_OFFSET,
           "blue": (DISPOSAL_AREA[0] + DISPOSAL_AREA[1]) / 2}
 LANE_DIR = {"red": -1, "green": 1, "blue": 0}   # X direction the lines march (toward the open centre)
@@ -317,8 +318,8 @@ class Robot:
         # Closing keeps the full 5 s squeeze; that is what holds the cube.
         self.grip_motor.set_timeout(5000 if degrees == GRIP_CLOSED_DEG else 1500, MSEC)
         self.grip_motor.spin_to_position(degrees, DEGREES, speed, PERCENT, True)
-        if abs(self.grip_motor.position(DEGREES) - degrees) > 30:
-            raise RobotError("gripper blocked")
+        if abs(self.grip_motor.position(DEGREES) - degrees) > 30:     # e.g. a neighbouring cube: keep going (03.10)
+            print("GRIP-SHORT,%.0f,target %d" % (self.grip_motor.position(DEGREES), degrees))
 
 
 # CUBE SEARCH ---------------------------------------------------------------
@@ -429,7 +430,14 @@ def find_cube(robot, failed):
     detector = CubeDetector()
 
     def skip(target):
-        return bool(target) and any(abs(target[0] - position) < CUBE_SIZE / 2 for position in failed)
+        # a spot is skipped only after PICK_TRIES failed picks there (03.10: one failed grab hid a cube all run)
+        if not target:
+            return False
+        tries = sum(1 for position in failed if abs(target[0] - position) < CUBE_SIZE / 2)
+        if tries >= PICK_TRIES:
+            print("SKIP,%.0f,%.0f,failed %d times" % (target[0], target[1], tries))
+            return True
+        return False
 
     # Scan left while reading the sensor. No separate wall calibration: when the trolley stops advancing
     # it has reached the far wall, so stop and judge the last segment (detector.finish, z_mean only), then
@@ -487,7 +495,8 @@ def pick(robot, target):
             return False
         if distance < seen[0] - 1:
             seen[0], seen[1] = distance, robot.z.mm()
-        pushing = distance <= 2 * HOLD_DISTANCE and robot.z.mm() - seen[1] > PUSH_MM
+        # only inside the claw: at <= 28 it fired 24 mm short of a far cube and closed on nothing (03.10)
+        pushing = distance <= HOLD_DISTANCE and robot.z.mm() - seen[1] > PUSH_MM
         return distance <= GRAB_DISTANCE or pushing
     # The fast part also watches the sensor: Z_MM_PER_DEG may be off, so the estimate z may be too far.
     reached = (robot.z.move(max(0, z - 30), Z_SPEED, touching) or
@@ -500,7 +509,10 @@ def pick(robot, target):
         robot.hold_firm()
     robot.z.move(0, CARRY_SPEED)
     distance = held_distance(robot)
-    return reached and distance is not None and distance <= HOLD_DISTANCE
+    held = reached and distance is not None and distance <= HOLD_DISTANCE
+    if not held:
+        print("GRAB-FAIL,reached %s,reading %s" % (reached, distance))
+    return held
 
 
 def colour(robot):
@@ -510,26 +522,44 @@ def colour(robot):
             hues.append(robot.optical.hue())
         wait(LOOP_MS, MSEC)
     if len(hues) < 4:
+        print("COLOUR,unknown,-,%d,%s" % (len(hues), hues))
         return "unknown"
+    raw = list(hues)
     if max(hues) - min(hues) > 180:
         hues = [h + 360 if h < 180 else h for h in hues]
     hue = sorted(hues)[len(hues) // 2] % 360
+    found = "unknown"
     for name in ("red", "green", "blue"):
         low, high = HUES[name]
         if (low <= hue <= high) if low <= high else (hue >= low or hue <= high):
-            return name
-    return "unknown"
+            found = name
+            break
+    # COLOUR,result,median hue,readings used,all hues: 03.10 a green cube came out red
+    print("COLOUR,%s,%.0f,%d,%s" % (found, hue, len(raw), [round(h) for h in raw]))
+    return found
 
 
 def place(robot, x, z):
     if not robot.move_x(x + CLAW_X_OFFSET, CARRY_SPEED, True):
         return False                                # cube lost on the way (already re-gripped once)
-    robot.z.move(z, CARRY_SPEED)
+    last = [robot.z.mm(), now()]
+
+    def stalled():
+        # The cube runs into the lane already placed: push as long as Z still moves, release once it has
+        # stood still for 0.3 s instead of stopping the run with "Z motion blocked" (03.10).
+        if abs(robot.z.mm() - last[0]) > 1:
+            last[0], last[1] = robot.z.mm(), now()
+        return now() - last[1] > 300
+    try:
+        robot.z.move(z, CARRY_SPEED, stalled)
+    except RobotError:          # the motor gave up against the lane ("blocked"/"timeout"): release here anyway
+        pass
     robot.grip(GRIP_OPEN_DEG, 20)
     robot.z.move(0, Z_SPEED)
     if (robot.read_distance() or 9999) <= HOLD_DISTANCE:     # still something in the claw
         raise RobotError("cube not released")
-    robot.grip(GRIP_CLOSED_DEG, 50)
+    # gripper stays open: it only closes around a cube (collect, carry, push), so it cannot close by
+    # accident next to the walls or the cubes already in storage (03.10)
     return True
 
 
@@ -538,6 +568,7 @@ def run(robot):
     drop = {name: (DROP_X[name], Z_BACK) for name in used}   # current (claw X, Z) for the next cube of each colour
     failed = []
     end_time = now() + 600000
+    robot.grip(GRIP_OPEN_DEG, 50)       # starts closed; open before any move and keep it open unless holding a cube
     robot.home()
     print("area,claw X,beam X,Z,distance,z mean", STORAGE_AREA, DISPOSAL_AREA, MINING_AREA)
     while now() < end_time:              # work till the very end of the match
