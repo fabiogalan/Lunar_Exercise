@@ -43,7 +43,7 @@ X_MINING_TEST = 610.0
 X_MINING_COMP = 1830.0
 
 COMPETITION = False         # True on competition day: uses the _COMP lengths
-CALIBRATION_SCAN = False   # True: scan the whole mining area once, print FOUND lines, pick nothing
+CALIBRATION_SCAN = True   # True: scan the whole mining area once, print FOUND lines, pick nothing
 X_STORAGE = X_STORAGE_COMP if COMPETITION else X_STORAGE_TEST
 X_DISPOSAL = X_DISPOSAL_COMP if COMPETITION else X_DISPOSAL_TEST
 X_MINING = X_MINING_COMP if COMPETITION else X_MINING_TEST
@@ -57,7 +57,7 @@ Z_MAX = 305                 # 380 - CUBE_SIZE for furthest claw position
 HOME_CLEAR_X = -10.0        # back 10 mm left off the bumper after homing
 REHOME_X = -60.0            # after every delivered cube: drive here fast, then re-home on the bumper (X drifts, 03.10)
                             # more than 30 mm left, so X drift cannot run the fast move into the bumper
-SEARCH_Z = -12.0           # !to measure! Z held here (slightly retracted) while scanning so the arm clears
+SEARCH_Z = -10.0           # !to measure! Z held here (slightly retracted) while scanning so the arm clears
                            # cubes that sit closer to the lanes; 0 is the collect/push reference
 X_TRAVEL_MIN = -3000.0     # generous left limit until the far wall is found by stall
 
@@ -418,7 +418,7 @@ class CubeDetector:
             return (self.start + self.end) / 2, self.nearest
         if self.pending is not None:
             mean, pstart, pend, pnear = self.pending
-            return (pstart + pend) / 2, pnear
+            return (min(pend, pstart - 55) + SENSOR_CLAW_OFFSET), pnear
         return None
 
 
