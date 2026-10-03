@@ -43,7 +43,7 @@ X_MINING_TEST = 610.0
 X_MINING_COMP = 1830.0
 
 COMPETITION = False         # True on competition day: uses the _COMP lengths
-CALIBRATION_SCAN = True   # True: scan the whole mining area once, print FOUND lines, pick nothing
+CALIBRATION_SCAN = False    # True: scan the whole mining area once, print FOUND lines, pick nothing
 X_STORAGE = X_STORAGE_COMP if COMPETITION else X_STORAGE_TEST
 X_DISPOSAL = X_DISPOSAL_COMP if COMPETITION else X_DISPOSAL_TEST
 X_MINING = X_MINING_COMP if COMPETITION else X_MINING_TEST
