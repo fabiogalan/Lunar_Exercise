@@ -106,8 +106,8 @@ HUES = {"red": (330.0, 25.0), "green": (70.0, 170.0), "blue": (180.0, 270.0)}
 # just past its far (left) edge is open for SIDE_CLEARANCE mm.
 SAMPLE_STEP = 2.5
 SMOOTH_COUNT = 5
-JUMP_MM = 7.5               # new segment when a reading is this far from the segment average
-                           # (7.5 kept a real row of 3 together, 5 split it: 01.10 logs; face noise +-2)
+JUMP_MM = 50.0             # new segment when a reading is this far from the segment average
+                           # (a real gap between cubes shows the floor / next row, a much larger jump)  # tuning
 CUBE_WIDTH_MIN = CUBE_SIZE - CUBE_MARGIN     # 65: a cube's flat face (sloped edges fall into short side segments)
 CUBE_WIDTH_MAX = 90.0 + CUBE_MARGIN          # 100
 SIDE_CLEARANCE = CUBE_MARGIN                 # clear space required past the far edge so the side arm fits
@@ -309,65 +309,66 @@ class Robot:
 # avoid triple quotes and backslashes inside.
 exec('''
 class CubeDetector:
-    # One reading per SAMPLE_STEP mm. A segment grows while readings stay within JUMP_MM of its average
-    # (z_mean of the last SMOOTH_COUNT). When a segment ends into DEEPER space it may be a cube; we then
-    # confirm the far (left, more negative) side is open for SIDE_CLEARANCE mm before returning it.
+    # One reading per SAMPLE_STEP mm. A segment grows while each new depth stays within JUMP_MM of the
+    # segment average (z_mean of the last SMOOTH_COUNT depths). When a segment ends into DEEPER space it may
+    # be a cube; we confirm the far (left, more negative) side is open for SIDE_CLEARANCE mm before returning.
     def __init__(self):
-        self.last_x = None
-        self.recent = []
-        self.start = self.end = self.nearest = None
-        self.pending = None          # (z_mean, start, end, nearest) awaiting left-clearance confirmation
+        self.first_x = self.last_x = None     # x of the first and most recent reading of the current segment
+        self.recent_z = []                    # up to SMOOTH_COUNT recent depths, for z_mean
+        self.near_z = None                    # nearest depth in the segment (the grab Z)
+        self.pending = None                   # (z_mean, first_x, last_x, near_z) awaiting far-side confirmation
 
     def z_mean(self):
-        return sum(self.recent) / len(self.recent)
+        return sum(self.recent_z) / len(self.recent_z)
 
     def new_segment(self, x, z):
-        self.recent, self.start, self.end, self.nearest = [z], x, x, z
+        self.first_x = self.last_x = x
+        self.recent_z = [z]
+        self.near_z = z
 
-    def is_cube(self, mean):
-        return (mean < WALL_Z - 5 and self.start is not None
-                and CUBE_WIDTH_MIN <= self.start - self.end <= CUBE_WIDTH_MAX)
+    def is_cube(self, z_mean):
+        return (z_mean < WALL_Z - 5 and self.first_x is not None
+                and CUBE_WIDTH_MIN <= self.first_x - self.last_x <= CUBE_WIDTH_MAX)
 
     def add(self, x, z):
-        if self.last_x is not None and self.last_x - x < SAMPLE_STEP:
+        if self.last_x is not None and self.last_x - x < SAMPLE_STEP:    # one reading per SAMPLE_STEP mm
             return None
-        self.last_x = x
-        z = 9999 if z is None else z
+        z = 9999 if z is None else z        # no reading: treat as far away
 
-        if self.pending is not None:
-            mean, pstart, pend, pnear = self.pending
-            if z <= mean + 1:                      # as near as the cube -> no gap, discard
+        if self.pending is not None:        # confirming the far side of a possible cube
+            z_mean, first_x, last_x, near_z = self.pending
+            if z <= z_mean:                 # as near as the cube: no gap, discard (no margin; push handles small overlap)
                 self.pending = None
                 self.new_segment(x, z)
                 return None
-            if x <= pend - SIDE_CLEARANCE:          # open space past the far edge: a real cube
+            if x <= last_x - SIDE_CLEARANCE:    # enough open (deeper) space past the far edge: a real cube
                 self.pending = None
-                return (pstart + pend) / 2, pnear
+                return (first_x + last_x) / 2, near_z
             return None
 
-        if self.recent:
-            mean = self.z_mean()
-            if abs(z - mean) <= JUMP_MM:
-                self.recent = (self.recent + [z])[-SMOOTH_COUNT:]
-                self.end = x
-                self.nearest = min(self.nearest, z)
+        if self.recent_z:                   # we have a segment: jump test against its average
+            z_mean = self.z_mean()
+            if abs(z_mean - z) < JUMP_MM:   # close to the segment -> same surface, add it
+                self.last_x = x
+                self.recent_z = (self.recent_z + [z])[-SMOOTH_COUNT:]    # keep the last SMOOTH_COUNT
+                self.near_z = min(self.near_z, z)
                 return None
-            if self.is_cube(mean) and z > mean:     # ended into a deeper gap -> confirm the far side
-                self.pending = (mean, self.start, self.end, self.nearest)
-                self.recent = []
+            if self.is_cube(z_mean) and z > z_mean:     # jumped into deeper space -> the segment may be a cube
+                self.pending = (z_mean, self.first_x, self.last_x, self.near_z)
+                self.recent_z = []
                 return None
-        self.new_segment(x, z)
+        self.new_segment(x, z)              # no segment yet, or a jump that was not a cube: start fresh
         return None
 
     def finish(self):
-        # The scan ended at the wall. Accept the open segment if it is nearer than the floor, even if it is
-        # too short (no width or clearance check): the beam cannot reach the last bit before the wall.
+        # Scan ended at the wall: save the open segment as a cube only if it is nearer than the floor and at
+        # least 40 mm wide. No full width/clearance check: the beam cannot reach the last bit before the wall.
         # !TODO measure! the gap from the beam at the leftmost reachable X to the wall must be < one cube.
-        if self.recent and self.z_mean() < WALL_Z - 5 and self.start is not None:
-            return (self.start + self.end) / 2, self.nearest
+        if self.recent_z and self.z_mean() < WALL_Z - 5 and self.first_x - self.last_x >= 40:
+            return (self.first_x + self.last_x) / 2, self.near_z
         if self.pending is not None:
-            mean, pstart, pend, pnear = self.pending
-            return (pstart + pend) / 2, pnear
+            z_mean, first_x, last_x, near_z = self.pending
+            return (first_x + last_x) / 2, near_z
         return None
 ''')
 

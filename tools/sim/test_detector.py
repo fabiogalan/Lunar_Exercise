@@ -4,6 +4,9 @@ import unittest
 
 from run import load_program
 
+SENSOR_SPREAD = 0.29          # the distance sensor's light spreads: a cube looks wider by 0.29 x its distance
+                              # (01.10 logs; tools-only, so it lives here rather than in main.py)
+
 
 def rotated_cube(centre, angle, front=80):
     c, s = math.cos(math.radians(angle)), math.sin(math.radians(angle))
@@ -34,7 +37,7 @@ class DetectorTests(unittest.TestCase):
             for left, right, depth in objects:
                 inside = min(max(x, left), right)
                 face = depth(inside) if callable(depth) else depth
-                ramp = self.g["SENSOR_SPREAD"] * (face + self.g["GRAB_DISTANCE"]) / 2
+                ramp = SENSOR_SPREAD * (face + self.g["GRAB_DISTANCE"]) / 2
                 off = max(left - x, x - right, 0)
                 if off <= ramp:
                     z = min(z, face + 40.0 * off / ramp if off else face)
@@ -43,7 +46,7 @@ class DetectorTests(unittest.TestCase):
             target = detector.add(x, z)
             if target:
                 return target
-        return detector.cube()
+        return detector.finish()
 
     def test_straight_cube(self):
         target = self.scan([(-537.5, -462.5, 80)])
