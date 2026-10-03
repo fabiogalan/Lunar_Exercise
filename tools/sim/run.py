@@ -18,10 +18,9 @@ def load_program():
                    port_grip=scope["PORT_GRIP"], k_x=scope["X_MM_PER_DEG"],
                    k_z=scope["Z_MM_PER_DEG"], dist_dx=-scope["SENSOR_X_OFFSET"],
                    claw_dx=-scope["CLAW_X_OFFSET"], grip_open=scope["GRIP_OPEN_DEG"],
-                   x_min=scope["X_WALL"], z_max=scope["Z_MAX"],
-                   wall_z=scope["WALL_Z"], grab_reading=scope["GRAB_DISTANCE"],
-                   hold_reading=max(1.0, scope["HOLD_DISTANCE"] - 1.0),
-                   grip_depth=scope["GRIP_DEPTH"])
+                   z_max=scope["Z_MAX"], wall_z=scope["WALL_Z"],
+                   grab_reading=scope["GRAB_DISTANCE"],
+                   hold_reading=max(1.0, scope["HOLD_DISTANCE"] - 1.0))
     return scope
 
 

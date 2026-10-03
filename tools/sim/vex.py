@@ -140,7 +140,7 @@ class Motor:
         if self.port == SIM["port_x"]:
             return (SIM["x_min"] / SIM["k_x"], SIM["x_max"] / SIM["k_x"])
         if self.port == SIM["port_z"]:
-            return (-5.0 / SIM["k_z"], SIM["z_max"] / SIM["k_z"])
+            return (-15.0 / SIM["k_z"], SIM["z_max"] / SIM["k_z"])
         return (min(0.0, SIM["grip_open"]) - 20.0, max(0.0, SIM["grip_open"]) + 20.0)
 
     def _step(self, ms):
@@ -175,6 +175,9 @@ class Motor:
 
     def set_timeout(self, value, units=MSEC):
         self._timeout = value
+
+    def set_max_torque(self, value, units=PERCENT):
+        pass
 
     def set_position(self, value, units=DEGREES):
         self._zero = self._pos - float(value)
