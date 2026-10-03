@@ -29,7 +29,7 @@ PORT_DISTANCE = Ports.PORT8
 PORT_GRIP = Ports.PORT9
 
 X_MM_PER_DEG = 0.3245       # 01.10 measured; positive motor motion moves the trolley right (toward the bumper)
-Z_MM_PER_DEG = 0.3245       # 01.10: Z moved 83 mm in 255 deg
+Z_MM_PER_DEG = 0.3245       # 01.10: Z moved 83 mm in 255 deg #TODO
 
 CLAW_X_OFFSET = 73.0        # bumper -> claw centre (where the cube centre goes)
 MACHINE_LENGTH = 228.0      # at max left, the bumper (right end of the machine) is 228 mm from the left wall
@@ -52,7 +52,7 @@ STORAGE_AREA = (-X_STORAGE, 0.0)
 DISPOSAL_AREA = (STORAGE_AREA[0] - X_DISPOSAL, STORAGE_AREA[0])
 MINING_AREA = (DISPOSAL_AREA[0] - X_MINING, DISPOSAL_AREA[0])
 
-Z_MAX = 400.0
+Z_MAX = 400.0 #TODO test? 
 HOME_CLEAR_X = -10.0        # back 10 mm left off the bumper after homing
 SEARCH_Z = -10.0           # !to measure! Z held here (slightly retracted) while scanning so the arm clears
                            # cubes that sit closer to the lanes; 0 is the collect/push reference
@@ -115,7 +115,7 @@ SIDE_CLEARANCE = CUBE_MARGIN                 # clear space required past the far
 POSITION_TOLERANCE = 3.0    # mm a finished motor may be off target before it counts as blocked
 LOOP_MS = 15                # loop time for all motion and sensor checks
 
-# Speeds in percent.
+# Speeds in percent. #TODO optimise 
 HOME_SPEED = 20
 SCAN_SPEED = 10             # ~2.5 mm between readings (01.10: the scan loop takes ~90 ms)
 TRAVEL_SPEED = 80
