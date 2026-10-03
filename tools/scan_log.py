@@ -91,7 +91,7 @@ def read_scans(path):
             scans.append((cur, None))
         elif line.startswith(("PICK", "DONE", "ERROR")):
             scanning = False
-        if scanning and parts[0] in AREAS and len(parts) == 5:     # the scan starts in DISPOSE
+        if scanning and parts[0] in AREAS and len(parts) >= 5:     # the scan starts in DISPOSE
             try:
                 x, raw = float(parts[2]), 0.0 if parts[4] == "-" else float(parts[4])
             except ValueError:
@@ -111,8 +111,8 @@ def surfaces(g, samples):
             continue
         last = x
         z = raw - g["GRAB_DISTANCE"] if 0 < raw <= 1000 else 9999
-        if cur and abs(z - sum(cur[2]) / len(cur[2])) <= g["JUMP_MM"]:
-            cur[1], cur[2] = x, (cur[2] + [z])[-g["SMOOTH_COUNT"]:]
+        if cur and abs(z - sum(cur[3]) / len(cur[3])) <= g["JUMP_MM"] + g["JUMP_PER_MM"] * min(sum(cur[3]) / len(cur[3]), g["WALL_Z"]):
+            cur[1] = x
             cur[3].append(z)
             continue
         cur = [x, x, [z], [z]]
@@ -208,7 +208,7 @@ def plot_run(g, path):
     for n, line in enumerate(open(path, errors="replace")):
         line = line.strip()
         parts = line.split(",")
-        if parts[0] in AREAS and len(parts) == 5:
+        if parts[0] in AREAS and len(parts) >= 5:
             try:
                 arm, sensor, z = float(parts[1]), float(parts[2]), float(parts[3])
             except ValueError:

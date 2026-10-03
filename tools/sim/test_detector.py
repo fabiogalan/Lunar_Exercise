@@ -27,7 +27,7 @@ class DetectorTests(unittest.TestCase):
 
     def scan(self, objects, gaps=(), start=-400, end=-1000):
         """Readings every 1 mm like the scan loop. Each object is (left, right, depth). The sensor spreads:
-        a 75 mm cube at reading d looks cube_width(d) wide (fitted from the real logs), so each object is
+        a 75 mm cube at reading d looks 45.7 + 0.401 d wide (fitted from the 01.10/03.10 logs), so each object is
         widened (or narrowed) on both sides by half the difference; each gap X in gaps reads 6 mm deeper
         (the 01.10 rows never split at JUMP_MM 7.5)."""
         g = self.g
@@ -37,7 +37,7 @@ class DetectorTests(unittest.TestCase):
             for left, right, depth in objects:
                 inside = min(max(x, left), right)
                 face = depth(inside) if callable(depth) else depth
-                grow = (g["CUBE_WIDTH_AT_0"] + g["CUBE_WIDTH_PER_MM"] * (face + g["GRAB_DISTANCE"]) - 75) / 2
+                grow = (45.7 + 0.401 * (face + g["GRAB_DISTANCE"]) - 75) / 2     # 03.10 width fit of the old logs
                 if left - grow <= x <= right + grow:
                     z = min(z, face)
             if any(abs(x - gap) <= 5 for gap in gaps):

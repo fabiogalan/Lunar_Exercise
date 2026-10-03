@@ -43,7 +43,7 @@ X_MINING_TEST = 610.0
 X_MINING_COMP = 1830.0
 
 COMPETITION = False         # True on competition day: uses the _COMP lengths
-CALIBRATION_SCAN = False    # True: scan the whole mining area once, print FOUND lines, pick nothing (docs/calibration.md)
+CALIBRATION_SCAN = False    # True: scan the whole mining area once, print FOUND lines, pick nothing
 X_STORAGE = X_STORAGE_COMP if COMPETITION else X_STORAGE_TEST
 X_DISPOSAL = X_DISPOSAL_COMP if COMPETITION else X_DISPOSAL_TEST
 X_MINING = X_MINING_COMP if COMPETITION else X_MINING_TEST
@@ -53,13 +53,15 @@ STORAGE_AREA = (-X_STORAGE, 0.0)
 DISPOSAL_AREA = (STORAGE_AREA[0] - X_DISPOSAL, STORAGE_AREA[0])
 MINING_AREA = (DISPOSAL_AREA[0] - X_MINING, DISPOSAL_AREA[0])
 
-Z_MAX = 400.0 #TODO test? 
+Z_MAX = 305                 # 380 - CUBE_SIZE for furthest claw position 
 HOME_CLEAR_X = -10.0        # back 10 mm left off the bumper after homing
-SEARCH_Z = -10.0           # !to measure! Z held here (slightly retracted) while scanning so the arm clears
+REHOME_X = -60.0            # after every delivered cube: drive here fast, then re-home on the bumper (X drifts, 03.10)
+                            # more than 30 mm left, so X drift cannot run the fast move into the bumper
+SEARCH_Z = -12.0           # !to measure! Z held here (slightly retracted) while scanning so the arm clears
                            # cubes that sit closer to the lanes; 0 is the collect/push reference
 X_TRAVEL_MIN = -3000.0     # generous left limit until the far wall is found by stall
 
-WALL_Z = 325.0             # grab-Z depth of the empty floor (01.10: empty floor reads ~345 - GRAB_DISTANCE)  !!TODO measure!!
+WALL_Z = 380             # grab-Z depth of the empty floor (01.10: empty floor reads ~345 - GRAB_DISTANCE)  !!TODO measure!!
 
 GRAB_MARGIN = 7.0          # sensor-to-cube reading when grabbing (noise + creep overshoot; 5 pushed the cube, 01.10)
 GRAB_DISTANCE = GRAB_MARGIN                  # reading at which we close the gripper
@@ -68,6 +70,9 @@ SENSOR_CLAW_OFFSET = 10.0   # claw centre -> distance beam (beam left of the cla
 SENSOR_X_OFFSET = CLAW_X_OFFSET + SENSOR_CLAW_OFFSET    # bumper -> beam = 83
 GRIP_OPEN_DEG = 90          # 90 grabbed well (01.10)
 GRIP_CLOSED_DEG = 0
+GRAB_SEAT = 5.0        #mm to push cube further in after touched to make it straighter
+PUSH_MM = 5.0               # Z moved in while the reading stopped shrinking = the claw is pushing the cube: grab
+                            # (03.10: reading stuck at 20 while Z went on, the cube slid back 40 mm and was not grabbed)
 
 # Scan: the beam starts SCAN_START_MARGIN before the mining edge (so a cube on the
 # edge shows its right side); the far end is the wall found at runtime.
@@ -91,7 +96,7 @@ WIDTH_BETWEEN_CLAWS = 90.0  # full opening between the two claws (the cube centr
 CUBES_PER_LINE = 4          # cubes stacked in depth per line before stepping X
 LANE_STEP_X = CUBE_SIZE + CUBE_MARGIN        # gap between lines
 LANE_STEP_Z = CUBE_SIZE                      # cubes in a line sit back-to-back
-Z_BACK = Z_MAX - CUBE_SIZE - CUBE_MARGIN     # deepest placement (each line is filled from the back)
+Z_BACK = Z_MAX - CUBE_MARGIN     # deepest placement (each line is filled from the back)
 
 # The first pile is one CLAW_X_OFFSET inside the edge so the claw can reach it and push the cube to the edge.
 DROP_X = {"red": PRODUCTION_AREA[1] - EDGE_MARGIN - CLAW_X_OFFSET,
@@ -106,32 +111,31 @@ HUES = {"red": (330.0, 25.0), "green": (70.0, 170.0), "blue": (180.0, 270.0)}
 # a cube when it is CUBE_WIDTH_MIN..MAX long, nearer than the floor, and the space
 # just past its far (left) edge is open for SIDE_CLEARANCE mm.
 SAMPLE_STEP = 2.5
-SMOOTH_COUNT = 5
-JUMP_MM = 7.5               # new segment when a reading is this far from the segment average
+SMOOTH_COUNT = 5            # not used any more: the segment mean is over ALL its readings (sum / count, 03.10)
+JUMP_MM = 10.0              # new segment when a reading is this far from the segment average
                            # (7.5 kept a real row of 3 together, 5 split it: 01.10 logs; face noise +-2)
+                           # 03.10: now the offset of z_jump_mm = JUMP_MM + JUMP_PER_MM * z (face noise ~8-12 at any z)
+JUMP_PER_MM = 0.02          # allowed jump = JUMP_PER_MM * z (03.10 logs: face noise 2.3 at z 36 ... 8.2 at z 213) FITTED CONSTAND FROM EXPERIMENT ON 3.10
+                           # 03.10 staircase (20mm_x_diff_test): 0.10 alone chopped near cubes; offset 10 + 0.02 with the
+                           # fixed mean found all 16 cubes in 7 logs (the last-5 mean followed the ramp between cubes 4 and 5)
 CUBE_WIDTH_MIN = CUBE_SIZE - CUBE_MARGIN     # 65: a cube's flat face (sloped edges fall into short side segments)
 CUBE_WIDTH_MAX = 90.0 + CUBE_MARGIN          # 100
 SIDE_CLEARANCE = CUBE_MARGIN                 # clear space required past the far edge so the side arm fits
-# CUBE_WIDTH_MIN/MAX above are no longer used: the sensor spreads, so a far cube looks wider (03.10: 69 mm
-# at reading 44, 144 mm at 222). The width the detector sees for ONE cube at sensor reading d (mm) is
-#     cube_width(d) = CUBE_WIDTH_AT_0 + CUBE_WIDTH_PER_MM * d
-# Fit both with tools/fit_width.py from calibration runs (docs/calibration.md).
-CUBE_WIDTH_AT_0 = 45.7      # 03.10 fit (tools/fit_width.py), 5 single cubes in 5 logs: residuals within +-4 mm
-CUBE_WIDTH_PER_MM = 0.401
-CUBE_WIDTH_TOL = 40.0       # segment shorter than cube_width - TOL: no cube; longer than cube_width + TOL: a row
-                            # (03.10: fragments <= -65, single cubes -4..+4, row of 2 +69); keep it
-                            # below 47 = half of (cube 75 + rule-7.2 gap 20), the width one more cube adds
+CUBE_WIDTH_MIN = 40.0       # replaces 65 above. 03.10, all 7 logs: fragments <= 22 mm, single cubes 56..144
+CUBE_WIDTH_MAX = 175.0      # replaces 100 above. Wider = a row (2+ cubes merged, 214 mm and more)
+ROW_FIRST_OFFSET = 60.0     # a row's first (right) cube centre = segment start - this (half a far single cube)
 
 POSITION_TOLERANCE = 3.0    # mm a finished motor may be off target before it counts as blocked
 LOOP_MS = 15                # loop time for all motion and sensor checks
 
 # Speeds in percent. #TODO optimise 
-HOME_SPEED = 20
-SCAN_SPEED = 10             # ~2.5 mm between readings (01.10: the scan loop takes ~90 ms)
+HOME_SPEED = 80
+SCAN_SPEED = 20             # ~2.5 mm between readings (01.10: the scan loop takes ~90 ms)
+                            # 03.10: 10 gave ~0.9 mm between readings; replays at 2x-4x still found every cube
 TRAVEL_SPEED = 80
-CARRY_SPEED = 50
-Z_SPEED = 40
-Z_CREEP_SPEED = 20
+CARRY_SPEED = 80
+Z_SPEED = 60
+Z_CREEP_SPEED = 40
 
 
 # HARDWARE AND BASIC MOVEMENT ------------------------------------------------
@@ -249,18 +253,20 @@ class Robot:
         value = self.distance.object_distance(MM)
         return value if 0 < value <= 1000 else None
 
-    def report(self, distance):
-        # area,claw X,beam X,Z,distance (field X), printed whenever the reading changes
+    def report(self, distance, mean=None):
+        # area,claw X,beam X,Z,distance,z mean (field X), printed whenever the reading changes
+        # z mean = the detector's segment mean (grab Z), "-" outside the scan or while confirming a cube
         if distance != self.last:
             self.last = distance
             x = self.x.mm()
-            print("%s,%.1f,%.1f,%.0f,%s" % (area(x - SENSOR_X_OFFSET), x - CLAW_X_OFFSET,
-                                            x - SENSOR_X_OFFSET, self.z.mm(),
-                                            "-" if distance is None else "%.0f" % distance))
+            print("%s,%.1f,%.1f,%.0f,%s,%s" % (area(x - SENSOR_X_OFFSET), x - CLAW_X_OFFSET,
+                                               x - SENSOR_X_OFFSET, self.z.mm(),
+                                               "-" if distance is None else "%.0f" % distance,
+                                               "-" if mean is None else "%.1f" % mean))
 
     def home(self):
         """Drive right to the bumper, define X=0, then back away."""
-        if self.z.mm() > 2:
+        if self.z.mm() > 5:
             raise RobotError("retract Z before homing")
         show("HOMING X", "moving right")
         self.homed = False
@@ -307,62 +313,68 @@ class Robot:
             lost[0] = 0
 
     def grip(self, degrees, speed):
-        self.grip_motor.set_timeout(5000, MSEC)
+        # Opening eases into 90 deg and ran into the 5 s timeout (the pause after homing, 03.10): 1.5 s is plenty.
+        # Closing keeps the full 5 s squeeze; that is what holds the cube.
+        self.grip_motor.set_timeout(5000 if degrees == GRIP_CLOSED_DEG else 1500, MSEC)
         self.grip_motor.spin_to_position(degrees, DEGREES, speed, PERCENT, True)
         if abs(self.grip_motor.position(DEGREES) - degrees) > 30:
             raise RobotError("gripper blocked")
 
 
 # CUBE SEARCH ---------------------------------------------------------------
-# The detector is compiled on its own when the program starts (exec), not together with the rest of
-# the file: the Brain runs out of memory compiling everything at once. Edit it like normal code, but
-# avoid triple quotes and backslashes inside. Keep new comments out here: the string stays in memory.
-#   scan_z: Z during the scan, so sensor reading = z - scan_z + GRAB_DISTANCE (cube_width uses the reading).
+# tools/ship.py strips comments and compiles each function and class on its own for the Brain (memory),
+# so comments here cost nothing on the Brain.
 #   is_cube: 0 no cube, 1 one cube, 2 a row (cubes side by side; the sensor spread hides their 20 mm gaps).
 #   A row returns its first (right) cube at once, whatever comes next: rule 7.2 keeps 20 mm free to its
 #   neighbour for the side arm. Pending: "as near as the cube" was mean + 1 (inside the +-2 face noise),
-#   now mean + JUMP_MM, the same tolerance that keeps a segment together.
-exec('''
+#   now mean + z_jump_mm(mean), the same tolerance that keeps a segment together.
+
 class CubeDetector:
     # One reading per SAMPLE_STEP mm. A segment grows while readings stay within JUMP_MM of its average
-    # (z_mean of the last SMOOTH_COUNT). When a segment ends into DEEPER space it may be a cube; we then
+    # (z_mean of the last SMOOTH_COUNT; since 03.10 of all its readings). When a segment ends into DEEPER space it may be a cube; we then
     # confirm the far (left, more negative) side is open for SIDE_CLEARANCE mm before returning it.
-    def __init__(self, scan_z=0.0):
-        self.scan_z = scan_z
+    def __init__(self):
         self.last_x = None
         self.recent = []
         self.start = self.end = self.nearest = None
         self.pending = None          # (z_mean, start, end, nearest) awaiting left-clearance confirmation
 
+    def z_jump_mm(self, mean):
+        return JUMP_MM + JUMP_PER_MM * min(mean, WALL_Z)
+
     def z_mean(self):
-        return sum(self.recent) / len(self.recent)
+        # mean of ALL readings of the segment: a ramp between two cubes cannot drag it along (03.10 staircase)
+        return self.total / self.count
 
     def new_segment(self, x, z):
-        self.recent, self.start, self.end, self.nearest = [z], x, x, z
-
-    def cube_width(self, mean):
-        return CUBE_WIDTH_AT_0 + CUBE_WIDTH_PER_MM * (mean - self.scan_z + GRAB_DISTANCE)
+        self.recent, self.start, self.end, self.nearest = [z], x, x, z    # recent: non-empty = segment open
+        self.total, self.count = z, 1
 
     def is_cube(self, mean):
         if mean >= WALL_Z - 5 or self.start is None:
             return 0
-        error = self.start - self.end - self.cube_width(mean)
-        if error < -CUBE_WIDTH_TOL:
+        width = self.start - self.end
+        if width < CUBE_WIDTH_MIN:
             return 0
-        return 1 if error <= CUBE_WIDTH_TOL else 2
+        return 1 if width <= CUBE_WIDTH_MAX else 2
+
+    def log(self, mean, cubes):
+        print("SEG,%.0f,%.0f,%.0f,%.1f,%s" % (self.start, self.end, self.start - self.end, mean,
+                                              ("no cube", "cube", "row")[cubes]))
 
     def first_of_row(self, mean):
-        return self.start - self.cube_width(mean) / 2, self.nearest
+        return self.start - ROW_FIRST_OFFSET, self.nearest
 
     def add(self, x, z):
-        if self.last_x is not None and self.last_x - x < SAMPLE_STEP:
-            return None
+        # if self.last_x is not None and self.last_x - x < SAMPLE_STEP:
+        #     return None
         self.last_x = x
         z = 9999 if z is None else z
 
         if self.pending is not None:
             mean, pstart, pend, pnear = self.pending
-            if z <= mean + JUMP_MM:                # as near as the cube -> no gap, discard
+            if z <= mean + self.z_jump_mm(mean):   # as near as the cube -> no gap, discard
+                print("DISCARD,%.0f,%.0f,%.1f,%.0f" % (pstart, pend, mean, z))
                 self.pending = None
                 self.new_segment(x, z)
                 return None
@@ -373,12 +385,15 @@ class CubeDetector:
 
         if self.recent:
             mean = self.z_mean()
-            if abs(z - mean) <= JUMP_MM:
-                self.recent = (self.recent + [z])[-SMOOTH_COUNT:]
+            jump = self.z_jump_mm(mean)
+            if abs(z - mean) <= jump:
+                self.total += z
+                self.count += 1
                 self.end = x
                 self.nearest = min(self.nearest, z)
                 return None
             cubes = self.is_cube(mean)
+            self.log(mean, cubes)
             if cubes == 2:
                 found = self.first_of_row(mean)
                 self.new_segment(x, z)
@@ -394,6 +409,8 @@ class CubeDetector:
         # The scan ended at the wall. Accept the open segment if it is nearer than the floor, even if it is
         # too short (no width or clearance check): the beam cannot reach the last bit before the wall.
         # !TODO measure! the gap from the beam at the leftmost reachable X to the wall must be < one cube.
+        if self.recent:
+            self.log(self.z_mean(), self.is_cube(self.z_mean()))
         if self.recent and self.is_cube(self.z_mean()) == 2:
             return self.first_of_row(self.z_mean())
         if self.recent and self.z_mean() < WALL_Z - 5 and self.start is not None:
@@ -402,15 +419,14 @@ class CubeDetector:
             mean, pstart, pend, pnear = self.pending
             return (pstart + pend) / 2, pnear
         return None
-''')
+
 
 
 def find_cube(robot, failed):
     robot.grip(GRIP_OPEN_DEG, 50)       # closed side arms sit in front of the sensor (reads ~90 everywhere, 01.10)
-    robot.move_x(SEARCH_START_X, TRAVEL_SPEED)
     robot.z.move(SEARCH_Z, Z_SPEED)     # slight retract so the arm clears cubes near the lanes
-    wait(300, MSEC)
-    detector = CubeDetector(robot.z.mm())
+    robot.move_x(SEARCH_START_X, TRAVEL_SPEED)
+    detector = CubeDetector()
 
     def skip(target):
         return bool(target) and any(abs(target[0] - position) < CUBE_SIZE / 2 for position in failed)
@@ -427,9 +443,9 @@ def find_cube(robot, failed):
             wait(LOOP_MS, MSEC)
             x = robot.x.mm()
             distance = robot.read_distance()
-            robot.report(distance)
             z = None if distance is None else robot.z.mm() + distance - GRAB_DISTANCE   # grab Z in the Z=0 frame
             target = detector.add(x - SENSOR_X_OFFSET, z)                               # field X of the beam
+            robot.report(distance, detector.z_mean() if detector.recent else None)
             if target and CALIBRATION_SCAN:
                 print("FOUND,%.0f,%.0f" % target)
             elif target and not skip(target):
@@ -451,9 +467,7 @@ def find_cube(robot, failed):
 
 
 # PICK AND SORT --------------------------------------------------------------
-# Compiled on its own like CubeDetector (exec, same rules: no triple quotes or backslashes inside) to keep
-# the Brain's compile memory down (03.10: 77 KB for the whole file; the Brain failed at 79, ran at 75).
-exec('''def held_distance(robot):
+def held_distance(robot):
     values = []
     for _ in range(5):
         values.append(robot.read_distance() or 9999)     # no reading counts as far away
@@ -463,17 +477,25 @@ exec('''def held_distance(robot):
 
 def pick(robot, target):
     x, z = target                       # field X of the cube centre, grab Z
-    robot.move_x(x + CLAW_X_OFFSET, SCAN_SPEED)
+    robot.move_x(x + CLAW_X_OFFSET, CARRY_SPEED)
     robot.grip(GRIP_OPEN_DEG, 20)
+    seen = [9999.0, 0.0]                # nearest reading so far and the Z where it was seen
 
     def touching():
         distance = robot.read_distance()
-        return distance is not None and distance <= GRAB_DISTANCE
+        if distance is None:
+            return False
+        if distance < seen[0] - 1:
+            seen[0], seen[1] = distance, robot.z.mm()
+        pushing = distance <= 2 * HOLD_DISTANCE and robot.z.mm() - seen[1] > PUSH_MM
+        return distance <= GRAB_DISTANCE or pushing
     # The fast part also watches the sensor: Z_MM_PER_DEG may be off, so the estimate z may be too far.
     reached = (robot.z.move(max(0, z - 30), Z_SPEED, touching) or
-               robot.z.move(min(z + 20, Z_MAX), Z_CREEP_SPEED, touching))
+               robot.z.move(min(z + 20, Z_MAX), Z_CREEP_SPEED, touching) or
+               (robot.read_distance() or 9999) <= HOLD_DISTANCE)   # 03.10: stopped at 11, inside the claw
     print("GRAB,deg,reading", robot.z_motor.position(DEGREES), robot.read_distance())
     if reached:
+        robot.z.move(min(robot.z.mm() + GRAB_SEAT, Z_MAX), Z_CREEP_SPEED) # seat cube deper, then close
         robot.grip(GRIP_CLOSED_DEG, 50)
         robot.hold_firm()
     robot.z.move(0, CARRY_SPEED)
@@ -517,7 +539,7 @@ def run(robot):
     failed = []
     end_time = now() + 600000
     robot.home()
-    print("area,claw X,beam X,Z,distance", STORAGE_AREA, DISPOSAL_AREA, MINING_AREA)
+    print("area,claw X,beam X,Z,distance,z mean", STORAGE_AREA, DISPOSAL_AREA, MINING_AREA)
     while now() < end_time:              # work till the very end of the match
         show("SEARCHING")
         target = find_cube(robot, failed)
@@ -537,6 +559,8 @@ def run(robot):
             show("lost on the way", name)           # cube dropped in transit; back to searching
             continue
         used[name] += 1
+        robot.move_x(REHOME_X, TRAVEL_SPEED)        # re-zero X on the bumper after every cube (X drifts, 03.10)
+        robot.home()
         # Advance this colour's drop pose for the next cube: back->front within a line of CUBES_PER_LINE,
         # then step X to the next line. If red and green would collide, dump this colour at the blue spot.
         if drop[name] != drop["blue"] and LANE_DIR[name] != 0:
@@ -550,7 +574,6 @@ def run(robot):
     robot.move_x(HOME_CLEAR_X, TRAVEL_SPEED)
     show("DONE", "G%d R%d B%d" % (used["green"], used["red"], used["blue"]))
 
-''')
 
 def main():
     robot = None
