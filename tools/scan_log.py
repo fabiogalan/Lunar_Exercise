@@ -144,7 +144,7 @@ def replay(g, samples):
             if hit and not any(abs(hit[0] - f[0]) < g["CUBE_SIZE"] / 2 for f in found):
                 found.append(hit)
             x -= 1.0
-    last = det.cube()                   # scan end: find_cube judges the last segment
+    last = det.finish()                 # scan end: find_cube judges the last segment
     if last and not any(abs(last[0] - f[0]) < g["CUBE_SIZE"] / 2 for f in found):
         found.append(last)
     return found
