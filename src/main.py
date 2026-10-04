@@ -56,7 +56,9 @@ Z_MAX = 400.0 #TODO test?
 HOME_CLEAR_X = -10.0        # back 10 mm left off the bumper after homing
 SEARCH_Z = -10.0           # !to measure! Z held here (slightly retracted) while scanning so the arm clears
                            # cubes that sit closer to the lanes; 0 is the collect/push reference
-X_TRAVEL_MIN = -3000.0     # generous left limit until the far wall is found by stall
+X_TRAVEL_MIN = -50000.0    # deliberately far left so it never limits travel before the real far
+                           # wall is found at runtime (the scan stall sets robot.x.minimum to the wall);
+                           # the only hard limit that must stay real is maximum = 0.0, the bumper
 
 WALL_Z = 325.0             # grab-Z depth of the empty floor (01.10: empty floor reads ~345 - GRAB_DISTANCE)  !!TODO measure!!
 
@@ -88,7 +90,7 @@ CLAW_WIDTH = 20.0           # !to measure! one claw's width
 WIDTH_BETWEEN_CLAWS = 90.0  # full opening between the two claws (the cube centre sits here); confirm on the build
                             # red and green pile centres must stay > WIDTH_BETWEEN_CLAWS + CUBE_MARGIN apart
 CUBES_PER_LINE = 4          # cubes stacked in depth per line before stepping X
-LANE_STEP_X = CUBE_SIZE + CUBE_MARGIN        # gap between lines
+LANE_STEP_X = CUBE_SIZE + 3 * CUBE_MARGIN    # gap between lines (room for a rotated cube's wider projection)
 LANE_STEP_Z = CUBE_SIZE                      # cubes in a line sit back-to-back
 Z_BACK = Z_MAX - CUBE_SIZE - CUBE_MARGIN     # deepest placement (each line is filled from the back)
 
@@ -463,13 +465,18 @@ def colour(robot):
 def place(robot, x, z):
     if not robot.move_x(x + CLAW_X_OFFSET, CARRY_SPEED, True):
         return False                                # cube lost on the way (already re-gripped once)
-    robot.z.move(z, CARRY_SPEED)
-    robot.grip(GRIP_OPEN_DEG, 20)
+    robot.grip(GRIP_OPEN_DEG, 20)                   # lift/open BEFORE the Z push: the open arm pushes the
+    robot.z.move(z, CARRY_SPEED)                     # released cube into the line (no need to grab the far side)
     robot.z.move(0, Z_SPEED)
     if (robot.read_distance() or 9999) <= HOLD_DISTANCE:     # still something in the claw
         raise RobotError("cube not released")
-    robot.grip(GRIP_CLOSED_DEG, 50)
-    return True
+    return True                                              # leave the gripper open; find_cube reopens anyway
+
+
+def reachable(robot, claw_x):
+    # True if the claw can be driven to this field X (claw centre) within the X travel.
+    target = claw_x + CLAW_X_OFFSET
+    return robot.x.minimum <= target <= robot.x.maximum
 
 
 def run(robot):
@@ -477,38 +484,64 @@ def run(robot):
     drop = {name: (DROP_X[name], Z_BACK) for name in used}   # current (claw X, Z) for the next cube of each colour
     failed = []
     end_time = now() + 600000
-    robot.home()
+    for attempt in range(3):             # homing is non-fatal: retry, then run anyway (never halt the match)
+        try:
+            robot.home()
+            break
+        except Exception as error:
+            robot.stop()
+            print("HOME FAILED (%d):" % attempt, error)
+            show("home retry", str(error)[:22])
+            wait(500, MSEC)
     print("area,claw X,beam X,Z,distance", STORAGE_AREA, DISPOSAL_AREA, MINING_AREA)
     while now() < end_time:              # work till the very end of the match
-        show("SEARCHING")
-        target = find_cube(robot, failed)
-        if target is None:
-            break
-        show("PICK", "X %.0f Z %.0f" % target)
-        if not pick(robot, target):
-            failed.append(target[0])                # record and skip this spot; keep going
-            continue
-        name = colour(robot)
-        if name == "unknown":
-            robot.move_x(HOME_CLEAR_X, CARRY_SPEED, True)
-            show("STOP: cube held", name)
-            return
-        x, z = drop[name]
-        if not place(robot, x, z):
-            show("lost on the way", name)           # cube dropped in transit; back to searching
-            continue
-        used[name] += 1
-        # Advance this colour's drop pose for the next cube: back->front within a line of CUBES_PER_LINE,
-        # then step X to the next line. If red and green would collide, dump this colour at the blue spot.
-        if drop[name] != drop["blue"] and LANE_DIR[name] != 0:
-            if used[name] % CUBES_PER_LINE == 0:    # line finished -> next line, back of the lane
-                drop[name] = (x + LANE_DIR[name] * LANE_STEP_X, Z_BACK)
-                if abs(drop["red"][0] - drop["green"][0]) < WIDTH_BETWEEN_CLAWS + CUBE_MARGIN:
-                    drop[name] = drop["blue"]        # no correct spot left: dump this colour with blue
-            else:
-                drop[name] = (x, z - LANE_STEP_Z)   # same line, next cube toward the front
-        # !TODO! push_pair(robot, name) after every two cubes once the core run works (see bottom)
-    robot.move_x(HOME_CLEAR_X, TRAVEL_SPEED)
+        # One cube per loop. Anything recoverable (motion blocked/timeout, grip stuck, lost cube,
+        # unreachable spot) must NOT end the match: stop the motion, log it, skip this spot, keep going.
+        target = None
+        try:
+            show("SEARCHING")
+            target = find_cube(robot, failed)
+            if target is None:
+                break
+            show("PICK", "X %.0f Z %.0f" % target)
+            if not pick(robot, target):
+                failed.append(target[0])                # record and skip this spot; keep going
+                continue
+            name = colour(robot)
+            if name == "unknown":
+                show("unknown colour", "-> disposal")   # unreadable: dump with blue, never end the match
+                name = "blue"
+            x, z = drop[name]
+            if (x, z) == drop["blue"] or not reachable(robot, x):
+                name, (x, z) = "blue", drop["blue"]     # lane already full, or outside travel: dump with blue
+            if not place(robot, x, z):
+                show("lost on the way", name)           # cube dropped in transit; back to searching
+                continue
+            used[name] += 1
+            # Advance this colour's drop pose for the next cube: back->front within a line of CUBES_PER_LINE,
+            # then step X to the next line. If red and green would collide, or the next line falls outside the
+            # X travel, dump this colour at the blue spot from now on.
+            if drop[name] != drop["blue"] and LANE_DIR[name] != 0:
+                if used[name] % CUBES_PER_LINE == 0:    # line finished -> next line, back of the lane
+                    drop[name] = (x + LANE_DIR[name] * LANE_STEP_X, Z_BACK)
+                    collide = abs(drop["red"][0] - drop["green"][0]) < WIDTH_BETWEEN_CLAWS + CUBE_MARGIN
+                    if collide or not reachable(robot, drop[name][0]):
+                        drop[name] = drop["blue"]        # no correct spot left: dump this colour with blue
+                else:
+                    drop[name] = (x, z - LANE_STEP_Z)   # same line, next cube toward the front
+            # !TODO! push_pair(robot, name) after every two cubes once the core run works (see bottom)
+        except Exception as error:                      # keep the match alive on any recoverable fault
+            robot.stop()
+            print("RECOVER:", error)
+            show("skip", str(error)[:22])
+            if target is not None:
+                failed.append(target[0])                # don't re-pick the same bad spot forever
+            wait(200, MSEC)                             # avoid a tight spin if a fault repeats
+    try:
+        robot.move_x(HOME_CLEAR_X, TRAVEL_SPEED)     # tidy up, but never let the final move halt the program
+    except Exception as error:
+        robot.stop()
+        print("END MOVE FAILED:", error)
     show("DONE", "G%d R%d B%d" % (used["green"], used["red"], used["blue"]))
 
 
