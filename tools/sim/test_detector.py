@@ -4,6 +4,9 @@ import unittest
 
 from run import load_program
 
+SENSOR_SPREAD = 0.29          # the distance sensor's light spreads: a cube looks wider by 0.29 x its distance
+                              # (01.10 logs; tools-only, so it lives here rather than in main.py)
+
 
 def rotated_cube(centre, angle, front=80):
     c, s = math.cos(math.radians(angle)), math.sin(math.radians(angle))
