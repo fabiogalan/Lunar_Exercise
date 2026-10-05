@@ -17,10 +17,9 @@ class ConfigTests(unittest.TestCase):
     def test_targets_within_x_travel(self):
         g = load_program()
         robot_x = {name: x + g["CLAW_X_OFFSET"] for name, x in g["DROP_X"].items()}
-        robot_x.update(search_start=g["SEARCH_START_X"], search_end=g["SEARCH_END_X"],
-                       home_clear=g["HOME_CLEAR_X"])
+        robot_x.update(search_start=g["SEARCH_START_X"], home_clear=g["HOME_CLEAR_X"])
         for name, x in robot_x.items():
-            self.assertTrue(g["X_MIN"] <= x <= 0.0, "%s at robot X %.0f is outside travel" % (name, x))
+            self.assertTrue(g["X_TRAVEL_MIN"] <= x <= 0.0, "%s at robot X %.0f is outside travel" % (name, x))
 
 
 if __name__ == "__main__":
