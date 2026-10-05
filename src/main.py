@@ -95,7 +95,7 @@ CLAW_WIDTH = 20.0           # !to measure! one claw's width
 WIDTH_BETWEEN_CLAWS = 90.0  # full opening between the two claws (the cube centre sits here); confirm on the build
                             # red and green pile centres must stay > WIDTH_BETWEEN_CLAWS + CUBE_MARGIN apart
 CUBES_PER_LINE = 4          # cubes stacked in depth per line before stepping X
-LANE_STEP_X = CUBE_SIZE + CUBE_MARGIN        # gap between lines
+LANE_STEP_X = CUBE_SIZE + CUBE_MARGIN* 3         # gap between lines
 LANE_STEP_Z = CUBE_SIZE                      # cubes in a line sit back-to-back
 Z_BACK = Z_MAX - CUBE_MARGIN     # deepest placement (each line is filled from the back)
 
